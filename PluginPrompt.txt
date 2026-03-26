@@ -1,0 +1,146 @@
+角色設定：你現在是一位資深 React 與微前端架構師。請為我的「本地優先熱插拔工具箱」開發一個全新的插件專案（不是修改既有專案）。
+
+目標：
+建立一個可被 Host 動態載入的 React 插件，具備本地持久化、重啟可還原、樣式隔離、可卸載清理、可部署單檔 ESM 產物。
+
+插件專屬需求
+[插件名稱]：____________________
+[插件 ID]：____________________ 
+[功能描述]：
+
+[數據需求]：(例如：需要儲存使用者的城市偏好、歷史紀錄等)
+
+====================================
+1. 專案初始化（全新專案）
+====================================
+
+請直接建立完整新專案結構（含必要設定與程式碼），使用：
+- React + TypeScript + Vite
+- npm 作為套件管理
+
+專案建立後，請確保可以執行：
+- 開發：npm run dev
+- 建置：npm run build
+- 產出：dist/plugin.js（單檔 ESM）
+
+====================================
+2. 核心技術規範（必須遵守）
+====================================
+
+A) SDK 型別引用
+- 專案根目錄存在 sdk (Git Submodule)
+- 設定 TypeScript paths：
+  "@toolbox/sdk" -> "./sdk/index.ts"
+- 必須從 @toolbox/sdk 使用型別：
+  IPlugin, IAppContext, IDataEnvelope
+
+B) Vite 建置
+- Library mode，入口為插件入口檔
+- 格式僅 es
+- 檔名固定 plugin.js
+- rollup external 必須包含：
+  - react
+  - react-dom/client
+  - @toolbox/sdk
+
+C) Host 相容（避免 jsx-runtime 載入錯誤）
+- 避免最終產物出現 Host 無法解析的 react/jsx-runtime 問題
+- 依配置選擇可被 Host 載入的 JSX runtime 策略
+- 最終 plugin.js 可被瀏覽器 ESM 正常載入
+
+D) 樣式隔離
+- 使用 postcss-prefix-selector
+- 所有 CSS 強制前綴：
+  #plugin-[插件ID]
+- 禁止污染全域樣式
+
+E) 插件生命週期
+- default export 一個符合 IPlugin 的物件
+- mount：
+  - 建立隔離容器 #plugin-[插件ID]
+  - createRoot 渲染 React
+- unmount：
+  - root.unmount()
+  - 清空容器
+  - 清理訂閱與事件監聽器（包含 eventBus on 回傳的 off/cleanup）
+
+====================================
+3. 數據傳輸協議與資料安全
+====================================
+
+A) Storage
+- 使用 context.storage.get(key) / save(key, data, version)
+- key 全程統一為 tasks
+- version 固定非空：1.0.0
+
+B) Event Bus
+- 使用 context.eventBus.emit 與 on
+- 提供至少一個示範事件（例如 TASK_COUNT_CHANGED）
+
+C) Zod 驗證
+- 使用 zod 定義任務資料模型
+- 寫入前驗證
+- 讀取後驗證與防守型降級（非法資料 -> []）
+
+====================================
+4. 還原與儲存時序（關鍵防踩雷）
+====================================
+
+必須實作以下保護：
+
+1) 啟動先 restore，再允許 save
+- mount 後先 get(tasks) 還原
+- 還原完成後才 set hydrated=true
+
+2) 儲存 guard
+- 任務變更 effect 中：
+  if (!hydrated) return
+- 加 firstPersist guard，跳過 hydrated 後第一輪 save，避免空狀態覆蓋
+
+3) 防守型還原解析（兼容不同 envelope）
+- 支援：
+  - 直接陣列
+  - envelope.data / value / payload / tasks
+  - JSON 字串包裝
+- 非陣列一律降級為 []
+
+4) 禁止啟動即寫入空資料
+- 不可在初始化流程呼叫 save(tasks, [])
+
+====================================
+5. 最小必要診斷日誌
+====================================
+
+請加上：
+- [task-board] restore start
+- [task-board] restore payload（preview + extractedPath）
+- [task-board] restore success（count + source）
+- [task-board] restore failed（error）
+- [task-board] save triggered（count）
+- [task-board] save failed（error）
+
+====================================
+6. 插件發佈與載入 URL 規範
+====================================
+
+若需遠端載入，必須使用可直鏈 JS URL：
+- raw.githubusercontent.com 或 jsDelivr
+- 禁止 github.com/.../blob/...（這是頁面網址，不是可直接載入腳本）
+
+====================================
+7. 交付格式（請嚴格輸出）
+====================================
+
+請輸出以下內容：
+
+1) 建立/修改了哪些檔案
+2) 每個檔案關鍵變更摘要
+3) 為何此設計可避免：
+   - 重啟後資料消失
+   - 載入失敗（Failed to fetch / jsx-runtime module specifier）
+4) 驗證結果（需附實際執行）：
+   - npm run build 成功
+   - dist/plugin.js 產出成功
+   - 新增 2 筆任務 -> 重啟 Host -> 任務仍存在
+   - hydrated 前不會 save 空資料
+5) 最後提供可直接貼入 Host 的插件 URL 範例格式

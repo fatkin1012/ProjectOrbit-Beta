@@ -6,17 +6,26 @@ import { installAndLoadPlugin } from '../core/pluginLoader';
 interface PluginContainerProps {
   pluginId: string;
   sourceUrl: string;
+  onReady?: (plugin: IPlugin) => void;
 }
 
-export function PluginContainer({ pluginId, sourceUrl }: PluginContainerProps) {
+const MOUNT_WARN_TIMEOUT_MS = 6000;
+
+export function PluginContainer({ pluginId, sourceUrl, onReady }: PluginContainerProps) {
   const mountRootRef = useRef<HTMLDivElement | null>(null);
   const activePluginRef = useRef<IPlugin | null>(null);
+  const onReadyRef = useRef(onReady);
 
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [errorMessage, setErrorMessage] = useState('');
 
   useEffect(() => {
+    onReadyRef.current = onReady;
+  }, [onReady]);
+
+  useEffect(() => {
     const controller = new AbortController();
+    let disposed = false;
 
     setStatus('loading');
     setErrorMessage('');
@@ -31,11 +40,40 @@ export function PluginContainer({ pluginId, sourceUrl }: PluginContainerProps) {
         }
 
         const context = createAppContext(pluginId);
-        await plugin.mount(mountPoint, context);
+        const mountResult = plugin.mount(mountPoint, context);
+
         activePluginRef.current = plugin;
-        setStatus('ready');
+
+        if (!disposed) {
+          setStatus('ready');
+          onReadyRef.current?.(plugin);
+        }
+
+        // Some plugins return a long-running Promise from mount (or never resolve).
+        // Do not block UI readiness on that Promise.
+        if (mountResult && typeof (mountResult as Promise<unknown>).then === 'function') {
+          const warnTimer = window.setTimeout(() => {
+            console.warn(
+              `[PluginContainer] mount Promise for "${pluginId}" is still pending after ${MOUNT_WARN_TIMEOUT_MS}ms.`
+            );
+          }, MOUNT_WARN_TIMEOUT_MS);
+
+          void Promise.resolve(mountResult)
+            .catch((error) => {
+              if (disposed) {
+                return;
+              }
+
+              const message = error instanceof Error ? error.message : 'Plugin mount failed.';
+              setErrorMessage(message);
+              setStatus('error');
+            })
+            .finally(() => {
+              window.clearTimeout(warnTimer);
+            });
+        }
       } catch (error) {
-        if (error instanceof DOMException && error.name === 'AbortError') {
+        if (disposed || (error instanceof DOMException && error.name === 'AbortError')) {
           return;
         }
 
@@ -46,6 +84,7 @@ export function PluginContainer({ pluginId, sourceUrl }: PluginContainerProps) {
     })();
 
     return () => {
+      disposed = true;
       controller.abort();
       const plugin = activePluginRef.current;
       const mountPoint = mountRootRef.current;
@@ -80,7 +119,7 @@ export function PluginContainer({ pluginId, sourceUrl }: PluginContainerProps) {
 
       <div
         ref={mountRootRef}
-        className={`plugin-root ${status === 'ready' ? 'is-ready' : 'is-hidden'}`}
+        className={`plugin-root ${status === 'error' ? 'is-hidden' : 'is-ready'}`}
       />
     </section>
   );

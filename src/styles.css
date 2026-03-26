@@ -1,18 +1,19 @@
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
 
 :root {
-  --bg-1: #f1f7ff;
-  --bg-2: #e8f1de;
-  --surface: rgba(255, 255, 255, 0.82);
+  --bg-1: #fff3e7;
+  --bg-2: #dff4f1;
+  --surface: rgba(255, 255, 255, 0.85);
   --surface-strong: #ffffff;
-  --text: #102430;
-  --muted: #4a626d;
-  --primary: #0b7285;
-  --primary-strong: #075564;
+  --text: #1a1f3a;
+  --muted: #4e566f;
+  --primary: #ff5f45;
+  --primary-strong: #d9412d;
+  --accent: #1aa697;
   --danger: #9f1239;
   --danger-bg: #ffe4e6;
-  --border: rgba(16, 36, 48, 0.12);
-  --shadow: 0 20px 40px rgba(11, 114, 133, 0.18);
+  --border: rgba(26, 31, 58, 0.14);
+  --shadow: 0 24px 42px rgba(35, 29, 93, 0.18);
 }
 
 * {
@@ -25,9 +26,9 @@ body {
   font-family: 'IBM Plex Sans', sans-serif;
   color: var(--text);
   background:
-    radial-gradient(circle at 15% 10%, rgba(11, 114, 133, 0.2), transparent 45%),
-    radial-gradient(circle at 90% 20%, rgba(34, 197, 94, 0.18), transparent 40%),
-    linear-gradient(155deg, var(--bg-1), var(--bg-2));
+    radial-gradient(circle at 12% 8%, rgba(255, 95, 69, 0.25), transparent 42%),
+    radial-gradient(circle at 84% 12%, rgba(26, 166, 151, 0.24), transparent 40%),
+    linear-gradient(152deg, var(--bg-1), var(--bg-2));
 }
 
 #root {
@@ -49,7 +50,7 @@ body {
   border: 1px solid var(--border);
   box-shadow: var(--shadow);
   backdrop-filter: blur(14px);
-  animation: slide-up 300ms ease-out both;
+  animation: slide-up 360ms ease-out both;
 }
 
 .eyebrow {
@@ -57,7 +58,7 @@ body {
   font-size: 0.82rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--primary-strong);
+  color: var(--primary);
   font-weight: 600;
 }
 
@@ -85,6 +86,55 @@ h2 {
   line-height: 1.6;
 }
 
+.hub-nav {
+  display: grid;
+  gap: 0.8rem;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.hub-chip {
+  min-height: 112px;
+  border: 1px solid rgba(26, 31, 58, 0.15);
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(245, 252, 251, 0.94));
+  color: var(--text);
+  text-align: left;
+  padding: 0.95rem;
+  display: grid;
+  gap: 0.28rem;
+  align-content: center;
+  transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+  box-shadow: 0 8px 18px rgba(42, 44, 83, 0.1);
+}
+
+.hub-chip:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 15px 24px rgba(31, 41, 55, 0.14);
+}
+
+.hub-chip.is-active {
+  border-color: color-mix(in srgb, var(--primary) 45%, white);
+  background: linear-gradient(130deg, #fff6f4, #f1fffc);
+  box-shadow: 0 18px 26px rgba(255, 95, 69, 0.2);
+}
+
+.plugin-chip {
+  background: linear-gradient(135deg, #f5fff9, #f7f7ff);
+  border-style: dashed;
+}
+
+.chip-title {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 1.08rem;
+  font-weight: 700;
+}
+
+.chip-tagline {
+  font-size: 0.86rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
 .card {
   background: var(--surface-strong);
   border: 1px solid var(--border);
@@ -92,6 +142,147 @@ h2 {
   padding: 1.25rem;
   box-shadow: 0 10px 30px rgba(16, 36, 48, 0.08);
   animation: slide-up 360ms ease-out both;
+}
+
+.workspace-grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.pane-card {
+  animation: slide-up 300ms ease-out both;
+}
+
+.pane-hidden {
+  display: none;
+}
+
+.status-grid {
+  margin-top: 1rem;
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+
+.status-tile {
+  border-radius: 14px;
+  border: 1px solid rgba(26, 31, 58, 0.15);
+  padding: 0.85rem;
+  background: linear-gradient(140deg, #ffffff, #fbf4ff);
+}
+
+.status-label {
+  margin: 0;
+  font-size: 0.78rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.status-value {
+  margin: 0.35rem 0 0;
+  font-size: 1.8rem;
+  line-height: 1;
+  font-family: 'Space Grotesk', sans-serif;
+  color: var(--primary-strong);
+}
+
+.ops-list {
+  margin: 1rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.65rem;
+}
+
+.ops-list li {
+  border: 1px solid rgba(26, 31, 58, 0.15);
+  border-radius: 12px;
+  background: #fff;
+  min-height: 48px;
+  padding: 0.7rem 0.8rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.installed-list li small {
+  color: var(--muted);
+}
+
+.installed-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.inline-open-btn {
+  min-height: 36px;
+  margin-top: 0;
+  border-radius: 10px;
+  font-size: 0.9rem;
+  padding: 0.2rem 0.9rem;
+  background: linear-gradient(135deg, var(--accent), #2bb7a8);
+}
+
+.inline-delete-btn {
+  min-height: 36px;
+  margin-top: 0;
+  border-radius: 10px;
+  font-size: 0.88rem;
+  padding: 0.2rem 0.8rem;
+  background: linear-gradient(135deg, #c11247, #e11d48);
+}
+
+.ops-list strong {
+  color: var(--accent);
+}
+
+.ops-actions {
+  margin-top: 1rem;
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.probe-message {
+  margin-top: 0.75rem;
+}
+
+.audit-panel {
+  margin-top: 1rem;
+  background: color-mix(in srgb, var(--surface) 90%, white 10%);
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--ink-muted) 20%, transparent);
+  padding: 0.85rem 1rem;
+}
+
+.audit-panel h3 {
+  margin: 0 0 0.5rem;
+  font-size: 0.98rem;
+}
+
+.audit-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.audit-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  font-size: 0.9rem;
+  color: var(--ink);
+}
+
+.audit-list strong {
+  font-size: 0.78rem;
+  color: var(--ink-muted);
 }
 
 .card-error {
@@ -141,7 +332,7 @@ button {
   margin-top: 0.3rem;
   border: none;
   border-radius: 12px;
-  background: linear-gradient(135deg, var(--primary), #1f9cb1);
+  background: linear-gradient(135deg, var(--primary), #ff7f31);
   color: white;
   font-weight: 600;
   font-size: 1rem;
@@ -253,5 +444,10 @@ button:focus-visible {
 @media (min-width: 900px) {
   .page-shell {
     padding-top: 3rem;
+  }
+
+  .workspace-grid {
+    grid-template-columns: 1fr 1.15fr;
+    align-items: start;
   }
 }
