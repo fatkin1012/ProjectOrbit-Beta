@@ -1,43 +1,39 @@
-import React from 'react';
+import { Component, type ErrorInfo, type ReactNode } from 'react';
 
-interface ErrorBoundaryProps {
-  fallback?: React.ReactNode;
-  children: React.ReactNode;
+interface Props {
+  children: ReactNode;
 }
 
-interface ErrorBoundaryState {
+interface State {
   hasError: boolean;
-  errorMessage?: string;
+  message: string;
 }
 
-export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  state: ErrorBoundaryState = {
+export class ErrorBoundary extends Component<Props, State> {
+  public state: State = {
     hasError: false,
-    errorMessage: undefined
+    message: ''
   };
 
-  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+  public static getDerivedStateFromError(error: Error): State {
     return {
       hasError: true,
-      errorMessage: error.message
+      message: error.message
     };
   }
 
-  componentDidCatch(error: Error, errorInfo: React.ErrorInfo): void {
-    console.error('[Plugin ErrorBoundary] runtime error', error, errorInfo);
+  public componentDidCatch(error: Error, info: ErrorInfo): void {
+    console.error('[ErrorBoundary] Render crash', error, info);
   }
 
-  render(): React.ReactNode {
+  public render() {
     if (this.state.hasError) {
-      if (this.props.fallback) {
-        return this.props.fallback;
-      }
-
       return (
-        <div className="plugin-state plugin-state--error">
-          <h3>Plugin Runtime Error</h3>
-          <p>{this.state.errorMessage ?? 'Unknown error'}</p>
-        </div>
+        <section className="card card-error" role="alert" aria-live="assertive">
+          <h2>UI Runtime Error</h2>
+          <p>The host intercepted an unrecoverable render failure.</p>
+          <pre>{this.state.message}</pre>
+        </section>
       );
     }
 

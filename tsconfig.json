@@ -1,18 +1,21 @@
 {
   "compilerOptions": {
-    "target": "ES2020",
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "ESNext",
-    "lib": ["DOM", "ES2020"],
-    "jsx": "react-jsx",
     "moduleResolution": "Bundler",
-    "strict": true,
+    "allowImportingTsExtensions": false,
     "resolveJsonModule": true,
-    "esModuleInterop": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true,
     "skipLibCheck": true,
     "baseUrl": ".",
     "paths": {
-      "@toolbox/sdk": ["packages/sdk/src/index.ts"]
+      "@toolbox/sdk": ["./sdk/index.ts"]
     }
   },
-  "include": ["src", "packages/sdk/src"]
+  "include": ["src", "sdk", "vite.config.ts"],
+  "references": [{ "path": "./tsconfig.node.json" }]
 }

@@ -1,28 +1,26 @@
-export type EnvelopeType = 'PERSIST' | 'SYNC' | 'EVENT';
-
 export interface IDataEnvelope<T> {
   pluginId: string;
   version: string;
   timestamp: number;
-  type: EnvelopeType;
+  type: 'PERSIST';
   payload: T;
 }
 
 export interface IStorageProxy {
-  get<T = unknown>(key: string): Promise<T | undefined>;
-  save<T = unknown>(key: string, payload: T, version: string): Promise<void>;
+  get<T>(key: string): Promise<T | null>;
+  save<T>(key: string, payload: T, version: string): Promise<void>;
 }
 
 export interface IEventBus {
-  emit<T = unknown>(event: string, payload: T): void;
-  on<T = unknown>(event: string, callback: (payload: T) => void): void;
-  off<T = unknown>(event: string, callback: (payload: T) => void): void;
+  emit<T = unknown>(eventName: string, payload: T): void;
+  on<T = unknown>(eventName: string, handler: (payload: T) => void): void;
+  off<T = unknown>(eventName: string, handler: (payload: T) => void): void;
 }
 
 export interface IAppContext {
   storage: IStorageProxy;
   eventBus: IEventBus;
-  theme: 'light' | 'dark';
+  theme: 'light' | 'dark' | 'system';
   initialConfig: Record<string, unknown>;
 }
 

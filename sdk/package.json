@@ -1,0 +1,9 @@
+{
+  "name": "@toolbox/sdk",
+  "version": "0.1.0",
+  "private": true,
+  "main": "index.ts",
+  "types": "index.ts",
+  "description": "Local development stand-in for toolbox SDK - replace with git submodule from Orbit-SDK",
+  "license": "MIT"
+}
