@@ -1,0 +1,91 @@
+:root {
+  color-scheme: light;
+  --bg: #f3f6f9;
+  --panel: #ffffff;
+  --text: #1a2530;
+  --muted: #5e6b77;
+  --danger: #b42318;
+  --loading: #12489c;
+  --border: #d8e0e8;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: 'Segoe UI', Tahoma, sans-serif;
+  background: radial-gradient(circle at top right, #e7eef6, var(--bg) 50%);
+  color: var(--text);
+}
+
+.app-root {
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 2rem 1rem 3rem;
+}
+
+.header h1 {
+  margin: 0;
+  font-size: 1.9rem;
+}
+
+.header p {
+  margin: 0.35rem 0 1.5rem;
+  color: var(--muted);
+}
+
+.plugin-shell {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1rem;
+  min-height: 240px;
+  box-shadow: 0 8px 24px rgba(12, 24, 35, 0.08);
+}
+
+.plugin-state {
+  border-radius: 10px;
+  padding: 0.75rem 0.9rem;
+  margin-bottom: 0.85rem;
+}
+
+.plugin-state--loading {
+  background: #eaf2ff;
+  color: var(--loading);
+}
+
+.plugin-state--error {
+  background: #fff1f1;
+  color: var(--danger);
+}
+
+.plugin-state--error h3 {
+  margin: 0 0 0.4rem;
+  font-size: 1rem;
+}
+
+.plugin-state--error p {
+  margin: 0;
+}
+
+.plugin-mount {
+  min-height: 160px;
+}
+
+.plugin-mount.is-ready {
+  animation: appear 0.24s ease;
+}
+
+@keyframes appear {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
