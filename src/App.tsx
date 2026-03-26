@@ -21,6 +21,7 @@ interface InstalledPlugin {
   version: string;
   url: string;
   lastOpenedAt: number;
+  revision: number;
 }
 
 const DEFAULT_PLUGIN_URL =
@@ -67,6 +68,13 @@ function loadInstalledPlugins(): InstalledPlugin[] {
           typeof (item as InstalledPlugin).url === 'string' &&
           typeof (item as InstalledPlugin).lastOpenedAt === 'number'
       )
+      .map((item) => ({
+        ...item,
+        revision:
+          typeof (item as Partial<InstalledPlugin>).revision === 'number'
+            ? (item as InstalledPlugin).revision
+            : (item as InstalledPlugin).lastOpenedAt
+      }))
       .sort((a, b) => b.lastOpenedAt - a.lastOpenedAt);
   } catch {
     return [];
@@ -103,6 +111,7 @@ export default function App() {
   const [probeMessage, setProbeMessage] = useState('');
   const [isProbing, setIsProbing] = useState(false);
   const [auditRecords, setAuditRecords] = useState<StorageAuditRecord[]>([]);
+  const [updatingPluginId, setUpdatingPluginId] = useState<string | null>(null);
 
   const activeInstalledPlugin = useMemo(() => {
     const pluginIdFromPane = toPluginIdFromPane(activePane);
@@ -112,6 +121,8 @@ export default function App() {
 
     return installedPlugins.find((plugin) => plugin.id === pluginIdFromPane) ?? null;
   }, [activePane, installedPlugins]);
+
+  const isPluginPaneActive = activeInstalledPlugin !== null;
 
   useEffect(() => {
     localStorage.setItem(INSTALLED_PLUGINS_STORAGE_KEY, JSON.stringify(installedPlugins));
@@ -142,14 +153,21 @@ export default function App() {
     setAuditRecords([]);
   }
 
-  function upsertInstalledPluginFromRuntime(plugin: IPlugin, url: string): void {
+  function upsertInstalledPluginFromRuntime(
+    plugin: IPlugin,
+    url: string,
+    options?: { forceReload?: boolean }
+  ): void {
     setInstalledPlugins((previous) => {
+      const existing = previous.find((item) => item.id === plugin.id);
+      const now = Date.now();
       const nextRecord: InstalledPlugin = {
         id: plugin.id,
         name: plugin.name,
         version: plugin.version,
         url,
-        lastOpenedAt: Date.now()
+        lastOpenedAt: now,
+        revision: options?.forceReload ? now : existing?.revision ?? now
       };
 
       const withoutCurrent = previous.filter((item) => item.id !== plugin.id);
@@ -182,6 +200,34 @@ export default function App() {
     }
   }
 
+  function updateInstalledPlugin(targetPluginId: string): void {
+    setUpdatingPluginId(targetPluginId);
+
+    const now = Date.now();
+
+    setInstalledPlugins((previous) => {
+      const target = previous.find((plugin) => plugin.id === targetPluginId);
+      if (!target) {
+        return previous;
+      }
+
+      const refreshed: InstalledPlugin = {
+        ...target,
+        lastOpenedAt: now,
+        revision: now
+      };
+
+      const withoutTarget = previous.filter((plugin) => plugin.id !== targetPluginId);
+      return [refreshed, ...withoutTarget];
+    });
+
+    setActivePane(pluginPaneId(targetPluginId));
+
+    window.setTimeout(() => {
+      setUpdatingPluginId((current) => (current === targetPluginId ? null : current));
+    }, 600);
+  }
+
   function onInstall(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -208,60 +254,64 @@ export default function App() {
   }
 
   return (
-    <main className="page-shell">
-      <section className="hero">
-        <p className="eyebrow">Orbit Hub</p>
-        <h1>Project Orbit Toolbox Runtime</h1>
-        <p className="hero-copy">
-          One host, multiple capabilities. Choose a function lane below to jump between plugin
-          workspace actions, library governance, and runtime operations.
-        </p>
-      </section>
+    <main className={`page-shell ${isPluginPaneActive ? 'page-shell-plugin-active' : ''}`}>
+      {!isPluginPaneActive && (
+        <>
+          <section className="hero">
+            <p className="eyebrow">Orbit Hub</p>
+            <h1>Project Orbit Toolbox Runtime</h1>
+            <p className="hero-copy">
+              One host, multiple capabilities. Choose a function lane below to jump between plugin
+              workspace actions, library governance, and runtime operations.
+            </p>
+          </section>
 
-      <section className="hub-nav" role="tablist" aria-label="Hub function selector">
-        {HUB_PANES.map((pane) => {
-          const isActive = pane.id === activePane;
+          <section className="hub-nav" role="tablist" aria-label="Hub function selector">
+            {HUB_PANES.map((pane) => {
+              const isActive = pane.id === activePane;
 
-          return (
-            <button
-              key={pane.id}
-              type="button"
-              role="tab"
-              aria-selected={isActive}
-              aria-controls={`pane-${pane.id}`}
-              id={`tab-${pane.id}`}
-              className={`hub-chip ${isActive ? 'is-active' : ''}`}
-              onClick={() => setActivePane(pane.id)}
-            >
-              <span className="chip-title">{pane.title}</span>
-              <span className="chip-tagline">{pane.tagline}</span>
-            </button>
-          );
-        })}
+              return (
+                <button
+                  key={pane.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={isActive}
+                  aria-controls={`pane-${pane.id}`}
+                  id={`tab-${pane.id}`}
+                  className={`host-btn hub-chip ${isActive ? 'is-active' : ''}`}
+                  onClick={() => setActivePane(pane.id)}
+                >
+                  <span className="chip-title">{pane.title}</span>
+                  <span className="chip-tagline">{pane.tagline}</span>
+                </button>
+              );
+            })}
 
-        {installedPlugins.map((plugin) => {
-          const paneId = pluginPaneId(plugin.id);
-          const isActive = paneId === activePane;
+            {installedPlugins.map((plugin) => {
+              const paneId = pluginPaneId(plugin.id);
+              const isActive = paneId === activePane;
 
-          return (
-            <button
-              key={paneId}
-              type="button"
-              role="tab"
-              aria-selected={isActive}
-              aria-controls={`pane-${paneId}`}
-              id={`tab-${paneId}`}
-              className={`hub-chip plugin-chip ${isActive ? 'is-active' : ''}`}
-              onClick={() => setActivePane(paneId)}
-            >
-              <span className="chip-title">{plugin.name}</span>
-              <span className="chip-tagline">{plugin.id} · v{plugin.version}</span>
-            </button>
-          );
-        })}
-      </section>
+              return (
+                <button
+                  key={paneId}
+                  type="button"
+                  role="tab"
+                  aria-selected={isActive}
+                  aria-controls={`pane-${paneId}`}
+                  id={`tab-${paneId}`}
+                  className={`host-btn hub-chip plugin-chip ${isActive ? 'is-active' : ''}`}
+                  onClick={() => setActivePane(paneId)}
+                >
+                  <span className="chip-title">{plugin.name}</span>
+                  <span className="chip-tagline">{plugin.id} · v{plugin.version}</span>
+                </button>
+              );
+            })}
+          </section>
+        </>
+      )}
 
-      {activePane === 'workspace' && (
+      {!isPluginPaneActive && activePane === 'workspace' && (
         <section
           className="workspace-grid"
           role="tabpanel"
@@ -298,7 +348,7 @@ export default function App() {
                 </p>
               )}
 
-              <button type="submit">Install and Mount</button>
+              <button type="submit" className="host-btn">Install and Mount</button>
             </form>
           </section>
 
@@ -313,7 +363,9 @@ export default function App() {
                   key={activePlugin.nonce}
                   pluginId={activePlugin.id}
                   sourceUrl={activePlugin.url}
-                  onReady={(plugin) => upsertInstalledPluginFromRuntime(plugin, activePlugin.url)}
+                  onReady={(plugin) =>
+                    upsertInstalledPluginFromRuntime(plugin, activePlugin.url, { forceReload: true })
+                  }
                 />
               )}
             </section>
@@ -331,14 +383,22 @@ export default function App() {
                     <div className="installed-actions">
                       <button
                         type="button"
-                        className="inline-open-btn"
+                        className="host-btn inline-open-btn"
                         onClick={() => setActivePane(pluginPaneId(plugin.id))}
                       >
                         Open
                       </button>
                       <button
                         type="button"
-                        className="inline-delete-btn"
+                        className="host-btn inline-update-btn"
+                        onClick={() => updateInstalledPlugin(plugin.id)}
+                        disabled={updatingPluginId === plugin.id}
+                      >
+                        {updatingPluginId === plugin.id ? 'Updating...' : 'Update'}
+                      </button>
+                      <button
+                        type="button"
+                        className="host-btn inline-delete-btn"
                         onClick={() => removeInstalledPlugin(plugin.id)}
                       >
                         Delete
@@ -352,7 +412,7 @@ export default function App() {
         </section>
       )}
 
-      {activePane === 'library' && (
+      {!isPluginPaneActive && activePane === 'library' && (
         <section className="card pane-card" role="tabpanel" id="pane-library" aria-labelledby="tab-library">
           <h2>Plugin Library</h2>
           <p className="muted">
@@ -375,7 +435,7 @@ export default function App() {
         </section>
       )}
 
-      {activePane === 'operations' && (
+      {!isPluginPaneActive && activePane === 'operations' && (
         <section
           className="card pane-card"
           role="tabpanel"
@@ -397,15 +457,15 @@ export default function App() {
             </li>
             <li>
               <span>Mounted Plugin Slot</span>
-              <strong>{activeInstalledPlugin ? activeInstalledPlugin.id : 'Idle'}</strong>
+              <strong>{activePlugin ? activePlugin.id : 'Idle'}</strong>
             </li>
           </ul>
 
           <div className="ops-actions">
-            <button type="button" onClick={handleRunProbe} disabled={isProbing}>
+            <button type="button" className="host-btn" onClick={handleRunProbe} disabled={isProbing}>
               {isProbing ? 'Running Probe...' : 'Run DB Probe'}
             </button>
-            <button type="button" className="inline-delete-btn" onClick={handleClearAudit}>
+            <button type="button" className="host-btn inline-delete-btn" onClick={handleClearAudit}>
               Clear Audit
             </button>
           </div>
@@ -439,23 +499,24 @@ export default function App() {
         return (
           <ErrorBoundary key={`persisted-pane-${plugin.id}`}>
             <section
-              className={`card pane-card ${isActive ? '' : 'pane-hidden'}`}
+              className={`plugin-page ${isActive ? '' : 'pane-hidden'}`}
               role="tabpanel"
               id={`pane-${paneId}`}
               aria-labelledby={`tab-${paneId}`}
               aria-hidden={!isActive}
             >
-              <h2>
-                {plugin.name} <span className="muted">v{plugin.version}</span>
-              </h2>
-              <p className="muted">
-                This plugin tab is persisted and stays mounted while you switch across hub lanes.
-              </p>
+              <button
+                type="button"
+                className="host-btn plugin-back-btn"
+                onClick={() => setActivePane('workspace')}
+              >
+                Back To Hub
+              </button>
               <PluginContainer
-                key={`persisted-${plugin.id}-${plugin.url}`}
+                key={`persisted-${plugin.id}-${plugin.url}-${plugin.revision}`}
                 pluginId={plugin.id}
                 sourceUrl={plugin.url}
-                onReady={(runtimePlugin) => upsertInstalledPluginFromRuntime(runtimePlugin, plugin.url)}
+                mode="fullpage"
               />
             </section>
           </ErrorBoundary>

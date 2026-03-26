@@ -62,20 +62,22 @@ body {
   font-weight: 600;
 }
 
-h1,
-h2,
-h3 {
+.hero h1,
+.card > h2,
+.plugin-page-header h2,
+.audit-panel h3 {
   font-family: 'Space Grotesk', sans-serif;
   margin: 0;
   line-height: 1.2;
 }
 
-h1 {
+.hero h1 {
   margin-top: 0.5rem;
   font-size: clamp(1.8rem, 3.8vw, 2.8rem);
 }
 
-h2 {
+.card > h2,
+.plugin-page-header h2 {
   font-size: 1.4rem;
 }
 
@@ -226,6 +228,15 @@ h2 {
   background: linear-gradient(135deg, var(--accent), #2bb7a8);
 }
 
+.inline-update-btn {
+  min-height: 36px;
+  margin-top: 0;
+  border-radius: 10px;
+  font-size: 0.9rem;
+  padding: 0.2rem 0.9rem;
+  background: linear-gradient(135deg, #ff7a00, #ff9f1c);
+}
+
 .inline-delete-btn {
   min-height: 36px;
   margin-top: 0;
@@ -327,7 +338,7 @@ h2 {
   box-shadow: 0 0 0 3px rgba(11, 114, 133, 0.25);
 }
 
-button {
+.host-btn {
   min-height: 46px;
   margin-top: 0.3rem;
   border: none;
@@ -340,15 +351,15 @@ button {
   transition: transform 160ms ease, filter 160ms ease;
 }
 
-button:hover {
+.host-btn:hover {
   filter: brightness(1.05);
 }
 
-button:active {
+.host-btn:active {
   transform: scale(0.98);
 }
 
-button:focus-visible {
+.host-btn:focus-visible {
   outline: 3px solid rgba(11, 114, 133, 0.35);
   outline-offset: 2px;
 }
@@ -368,6 +379,13 @@ button:focus-visible {
 
 .plugin-shell {
   margin-top: 1rem;
+}
+
+.plugin-shell-fullpage {
+  margin-top: 0;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
 }
 
 .plugin-feedback {
@@ -415,12 +433,50 @@ button:focus-visible {
   background: white;
 }
 
+.plugin-root-fullpage {
+  margin-top: 0;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+  min-height: 100dvh;
+  flex: 1;
+  overflow: visible;
+}
+
 .plugin-root.is-hidden {
   display: none;
 }
 
 .plugin-root.is-ready {
   display: block;
+}
+
+.page-shell-plugin-active {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+}
+
+.plugin-page {
+  animation: slide-up 300ms ease-out both;
+  min-height: 100dvh;
+  position: relative;
+}
+
+.plugin-back-btn {
+  position: fixed;
+  top: 0.9rem;
+  right: 0.9rem;
+  margin-top: 0;
+  min-height: 40px;
+  padding: 0.25rem 0.9rem;
+  font-size: 0.9rem;
+  border-radius: 10px;
+  z-index: 30;
+  opacity: 0.92;
 }
 
 @keyframes spin {
@@ -444,6 +500,10 @@ button:focus-visible {
 @media (min-width: 900px) {
   .page-shell {
     padding-top: 3rem;
+  }
+
+  .page-shell-plugin-active {
+    padding-top: 0;
   }
 
   .workspace-grid {

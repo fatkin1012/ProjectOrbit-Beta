@@ -1,6 +1,17 @@
 import type { IPlugin } from '@toolbox/sdk';
 import { getPluginCode, savePluginCode } from './storageManager';
 
+const LOADER_LOG_PREFIX = '[PluginLoader:debug]';
+
+function debugLog(message: string, data?: unknown): void {
+  if (data === undefined) {
+    console.info(`${LOADER_LOG_PREFIX} ${message}`);
+    return;
+  }
+
+  console.info(`${LOADER_LOG_PREFIX} ${message}`, data);
+}
+
 type PluginLike = Partial<IPlugin> & Record<string, unknown>;
 
 function isPluginCore(value: unknown): value is PluginLike {
@@ -106,12 +117,116 @@ async function importFromCode(code: string): Promise<Record<string, unknown>> {
   }
 }
 
+async function importFromUrl(url: string): Promise<Record<string, unknown>> {
+  const resolved = new URL(url, window.location.href);
+  // Force a fresh module evaluation so plugin updates with the same URL can remount immediately.
+  resolved.searchParams.set('__orbit_host_ts', String(Date.now()));
+  debugLog('importing plugin module from URL', { inputUrl: url, resolvedUrl: resolved.toString() });
+  return (await import(/* @vite-ignore */ resolved.toString())) as Record<string, unknown>;
+}
+
+function toJsDelivrUrl(url: string): string | null {
+  const rawMatch = url.match(/^https:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/([^/]+)\/(.+)$/i);
+  if (!rawMatch) {
+    return null;
+  }
+
+  const [, owner, repo, ref, filePath] = rawMatch;
+  return `https://cdn.jsdelivr.net/gh/${owner}/${repo}@${ref}/${filePath}`;
+}
+
+function getImportUrlCandidates(url: string): string[] {
+  const candidates = [url, toJsDelivrUrl(url)].filter((value): value is string => Boolean(value));
+  return Array.from(new Set(candidates));
+}
+
+function toCompanionCssCandidates(moduleUrl: string): string[] {
+  const parsed = new URL(moduleUrl, window.location.href);
+  const parts = parsed.pathname.split('/');
+  const fileName = parts[parts.length - 1] ?? 'plugin.js';
+  const baseName = fileName.replace(/\.[^.]+$/, '');
+
+  const cssNames = [
+    `${baseName}.css`,
+    'plugin.css',
+    'style.css',
+    'styles.css',
+    'orbit-task-board.css'
+  ];
+
+  const baseHref = parsed.toString().replace(/[^/]*([?#].*)?$/, '');
+  return cssNames.map((name) => new URL(name, baseHref).toString());
+}
+
+function hasStylesheetLink(url: string): boolean {
+  const links = document.querySelectorAll('link[rel="stylesheet"]');
+  return Array.from(links).some((link) => {
+    const href = (link as HTMLLinkElement).href;
+    return href === url || href.startsWith(`${url}?`);
+  });
+}
+
+async function loadCompanionStylesheet(url: string, pluginId: string): Promise<boolean> {
+  if (hasStylesheetLink(url)) {
+    debugLog('stylesheet already loaded, skipping', { pluginId, url });
+    return true;
+  }
+
+  return await new Promise<boolean>((resolve) => {
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = `${url}${url.includes('?') ? '&' : '?'}__orbit_style_ts=${Date.now()}`;
+    link.dataset.orbitPluginStyle = pluginId;
+
+    link.onload = () => {
+      debugLog('companion stylesheet loaded', { pluginId, url });
+      resolve(true);
+    };
+
+    link.onerror = () => {
+      link.remove();
+      debugLog('companion stylesheet failed', { pluginId, url });
+      resolve(false);
+    };
+
+    document.head.appendChild(link);
+  });
+}
+
+async function ensurePluginStyles(pluginId: string, moduleUrl: string): Promise<void> {
+  const candidates = toCompanionCssCandidates(moduleUrl);
+  debugLog('probing companion stylesheet candidates', { pluginId, candidates });
+
+  for (const candidate of candidates) {
+    const ok = await loadCompanionStylesheet(candidate, pluginId);
+    if (ok) {
+      return;
+    }
+  }
+
+  debugLog('no companion stylesheet could be loaded', { pluginId, moduleUrl });
+}
+
 function toErrorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
   }
 
   return 'Unknown error';
+}
+
+type BundleProfile = 'kanban-modern' | 'task-board-legacy' | 'unknown';
+
+function detectBundleProfile(jsCode: string): BundleProfile {
+  if (/kanban-shell|board-sidebar|workspace-header/.test(jsCode)) {
+    return 'kanban-modern';
+  }
+
+  if (/task-board__|task-column|TASK_COUNT_CHANGED/.test(jsCode)) {
+    return 'task-board-legacy';
+  }
+
+  return 'unknown';
 }
 
 export async function installAndLoadPlugin(
@@ -128,19 +243,90 @@ export async function installAndLoadPlugin(
   }
 
   let jsCode = '';
+  let moduleExports: Record<string, unknown> | null = null;
+  let importedFromUrl: string | null = null;
+
+  debugLog('installAndLoadPlugin start', { pluginId, url });
 
   try {
-    const response = await fetch(url, { signal });
+    const response = await fetch(url, {
+      signal,
+      cache: 'no-store'
+    });
+    debugLog('fetch completed', {
+      ok: response.ok,
+      status: response.status,
+      statusText: response.statusText,
+      contentType: response.headers.get('content-type'),
+      contentLength: response.headers.get('content-length')
+    });
+
     if (!response.ok) {
       throw new Error(`Failed to fetch plugin: ${response.status} ${response.statusText}`);
     }
 
     jsCode = await response.text();
+    const bundleProfile = detectBundleProfile(jsCode);
+    debugLog('plugin source downloaded', {
+      chars: jsCode.length,
+      preview: jsCode.slice(0, 180),
+      bundleProfile
+    });
+
+    if (bundleProfile === 'task-board-legacy') {
+      console.warn(
+        '[PluginLoader] Loaded plugin bundle looks like legacy task-board UI. ' +
+          'If you expect the full kanban UI, the remote dist/plugin.js is likely outdated and should be rebuilt/published.'
+      );
+    }
+
     await savePluginCode(pluginId, jsCode);
+    debugLog('plugin source cached to storage', { pluginId, chars: jsCode.length });
+
+    const importCandidates = getImportUrlCandidates(url);
+    debugLog('trying URL import candidates', { pluginId, importCandidates });
+
+    let lastImportError: unknown = null;
+    for (const candidate of importCandidates) {
+      try {
+        moduleExports = await importFromUrl(candidate);
+        importedFromUrl = candidate;
+        debugLog('URL import succeeded', {
+          pluginId,
+          importedFromUrl,
+          exportKeys: Object.keys(moduleExports)
+        });
+        break;
+      } catch (urlImportError) {
+        lastImportError = urlImportError;
+        debugLog('URL import candidate failed', { pluginId, candidate, error: toErrorMessage(urlImportError) });
+      }
+    }
+
+    if (!moduleExports) {
+      console.warn(
+        `[PluginLoader] URL import failed for "${pluginId}", falling back to blob import.`,
+        lastImportError
+      );
+      debugLog('attempting blob import fallback', {
+        pluginId,
+        containsCssHint:
+          /\.css['\"]|from\s+['\"][^'\"]+\.css['\"]|url\(/i.test(jsCode)
+      });
+      moduleExports = await importFromCode(jsCode);
+      debugLog('blob import succeeded', { exportKeys: Object.keys(moduleExports) });
+    } else if (importedFromUrl) {
+      await ensurePluginStyles(pluginId, importedFromUrl);
+    }
   } catch (fetchError) {
     if (fetchError instanceof DOMException && fetchError.name === 'AbortError') {
       throw fetchError;
     }
+
+    debugLog('fetch failed, trying cached plugin code', {
+      pluginId,
+      reason: toErrorMessage(fetchError)
+    });
 
     const cachedCode = await getPluginCode(pluginId);
     if (!cachedCode) {
@@ -148,11 +334,21 @@ export async function installAndLoadPlugin(
     }
 
     jsCode = cachedCode;
+    debugLog('loaded cached plugin source', { pluginId, chars: jsCode.length });
+    moduleExports = await importFromCode(jsCode);
+    debugLog('cached blob import succeeded', { exportKeys: Object.keys(moduleExports) });
   }
 
-  const moduleExports = await importFromCode(jsCode);
+  if (!moduleExports) {
+    throw new Error('Plugin module failed to load.');
+  }
+
   const pluginCandidate = resolvePluginExport(moduleExports);
   const plugin = normalizePlugin(pluginCandidate, pluginId);
+  debugLog('resolved plugin export candidate', {
+    moduleKeys: Object.keys(moduleExports),
+    resolvedKeys: getObjectKeys(pluginCandidate)
+  });
 
   if (!plugin) {
     const missingFields = getMissingContractFields(pluginCandidate).join(', ');
@@ -175,6 +371,12 @@ export async function installAndLoadPlugin(
   if (plugin.id !== pluginId) {
     throw new Error(`Plugin id mismatch: expected "${pluginId}", received "${plugin.id}".`);
   }
+
+  debugLog('plugin contract validated', {
+    pluginId: plugin.id,
+    name: plugin.name,
+    version: plugin.version
+  });
 
   return plugin;
 }

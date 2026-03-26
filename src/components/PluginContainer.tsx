@@ -6,12 +6,49 @@ import { installAndLoadPlugin } from '../core/pluginLoader';
 interface PluginContainerProps {
   pluginId: string;
   sourceUrl: string;
+  mode?: 'embedded' | 'fullpage';
   onReady?: (plugin: IPlugin) => void;
 }
 
 const MOUNT_WARN_TIMEOUT_MS = 6000;
+const CONTAINER_LOG_PREFIX = '[PluginContainer:debug]';
 
-export function PluginContainer({ pluginId, sourceUrl, onReady }: PluginContainerProps) {
+function getStylesheetCount(): number {
+  try {
+    return document.styleSheets.length;
+  } catch {
+    return -1;
+  }
+}
+
+async function waitForMountReady(node: HTMLElement, timeoutMs = 1200): Promise<void> {
+  const start = performance.now();
+
+  await new Promise<void>((resolve) => {
+    const check = () => {
+      if (node.clientWidth > 0 && node.clientHeight > 0) {
+        resolve();
+        return;
+      }
+
+      if (performance.now() - start >= timeoutMs) {
+        resolve();
+        return;
+      }
+
+      window.requestAnimationFrame(check);
+    };
+
+    check();
+  });
+}
+
+export function PluginContainer({
+  pluginId,
+  sourceUrl,
+  mode = 'embedded',
+  onReady
+}: PluginContainerProps) {
   const mountRootRef = useRef<HTMLDivElement | null>(null);
   const activePluginRef = useRef<IPlugin | null>(null);
   const onReadyRef = useRef(onReady);
@@ -30,19 +67,56 @@ export function PluginContainer({ pluginId, sourceUrl, onReady }: PluginContaine
     setStatus('loading');
     setErrorMessage('');
 
+    console.info(`${CONTAINER_LOG_PREFIX} load cycle start`, {
+      pluginId,
+      sourceUrl,
+      mode,
+      stylesheetCount: getStylesheetCount()
+    });
+
     void (async () => {
       try {
         const plugin = await installAndLoadPlugin(sourceUrl, pluginId, controller.signal);
         const mountPoint = mountRootRef.current;
 
+        console.info(`${CONTAINER_LOG_PREFIX} plugin loaded`, {
+          requestedPluginId: pluginId,
+          resolvedPluginId: plugin.id,
+          pluginName: plugin.name,
+          pluginVersion: plugin.version
+        });
+
         if (!mountPoint) {
           throw new Error('Plugin mount point does not exist.');
         }
+
+        await waitForMountReady(mountPoint);
+
+        const beforeMountStylesheetCount = getStylesheetCount();
+        console.info(`${CONTAINER_LOG_PREFIX} mount start`, {
+          pluginId,
+          beforeMountStylesheetCount,
+          mountWidth: mountPoint.clientWidth,
+          mountHeight: mountPoint.clientHeight
+        });
 
         const context = createAppContext(pluginId);
         const mountResult = plugin.mount(mountPoint, context);
 
         activePluginRef.current = plugin;
+
+        window.setTimeout(() => {
+          if (disposed) {
+            return;
+          }
+
+          console.info(`${CONTAINER_LOG_PREFIX} post-mount snapshot`, {
+            pluginId,
+            afterMountStylesheetCount: getStylesheetCount(),
+            childElementCount: mountPoint.childElementCount,
+            firstChildTagName: mountPoint.firstElementChild?.tagName ?? null
+          });
+        }, 0);
 
         if (!disposed) {
           setStatus('ready');
@@ -64,6 +138,10 @@ export function PluginContainer({ pluginId, sourceUrl, onReady }: PluginContaine
                 return;
               }
 
+              console.error(`${CONTAINER_LOG_PREFIX} mount promise rejected`, {
+                pluginId,
+                error
+              });
               const message = error instanceof Error ? error.message : 'Plugin mount failed.';
               setErrorMessage(message);
               setStatus('error');
@@ -77,6 +155,11 @@ export function PluginContainer({ pluginId, sourceUrl, onReady }: PluginContaine
           return;
         }
 
+        console.error(`${CONTAINER_LOG_PREFIX} load cycle failed`, {
+          pluginId,
+          sourceUrl,
+          error
+        });
         const message = error instanceof Error ? error.message : 'Unknown plugin load error.';
         setErrorMessage(message);
         setStatus('error');
@@ -95,6 +178,12 @@ export function PluginContainer({ pluginId, sourceUrl, onReady }: PluginContaine
         return;
       }
 
+      console.info(`${CONTAINER_LOG_PREFIX} unmount start`, {
+        pluginId,
+        childElementCount: mountPoint.childElementCount,
+        stylesheetCount: getStylesheetCount()
+      });
+
       void Promise.resolve(plugin.unmount(mountPoint)).catch((error) => {
         console.error(`[PluginContainer] unmount failed for ${pluginId}`, error);
       });
@@ -102,7 +191,7 @@ export function PluginContainer({ pluginId, sourceUrl, onReady }: PluginContaine
   }, [pluginId, sourceUrl]);
 
   return (
-    <section className="plugin-shell" aria-live="polite">
+    <section className={`plugin-shell ${mode === 'fullpage' ? 'plugin-shell-fullpage' : ''}`} aria-live="polite">
       {status === 'loading' && (
         <div className="plugin-feedback loading-state" role="status">
           <div className="loader" />
@@ -119,7 +208,7 @@ export function PluginContainer({ pluginId, sourceUrl, onReady }: PluginContaine
 
       <div
         ref={mountRootRef}
-        className={`plugin-root ${status === 'error' ? 'is-hidden' : 'is-ready'}`}
+        className={`plugin-root ${mode === 'fullpage' ? 'plugin-root-fullpage' : ''} ${status === 'error' ? 'is-hidden' : 'is-ready'}`}
       />
     </section>
   );
