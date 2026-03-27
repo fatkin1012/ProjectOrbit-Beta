@@ -45,13 +45,12 @@ function toPluginIdFromPane(pane: HubPane): string | null {
   return pane.slice('plugin:'.length);
 }
 
-function loadInstalledPlugins(): InstalledPlugin[] {
-  try {
-    const raw = localStorage.getItem(INSTALLED_PLUGINS_STORAGE_KEY);
-    if (!raw) {
-      return [];
-    }
+function normalizeInstalledPlugins(raw: string | null): InstalledPlugin[] {
+  if (!raw) {
+    return [];
+  }
 
+  try {
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) {
       return [];
@@ -81,6 +80,41 @@ function loadInstalledPlugins(): InstalledPlugin[] {
   }
 }
 
+function loadInstalledPluginsFromLocalStorage(): InstalledPlugin[] {
+  return normalizeInstalledPlugins(localStorage.getItem(INSTALLED_PLUGINS_STORAGE_KEY));
+}
+
+async function loadInstalledPluginsFromDesktopBridge(): Promise<InstalledPlugin[] | null> {
+  const desktopBridge = window.__ORBIT_DESKTOP__;
+  if (!desktopBridge) {
+    return null;
+  }
+
+  try {
+    const raw = await desktopBridge.installedPlugins.get();
+    return normalizeInstalledPlugins(raw);
+  } catch (error) {
+    console.warn('[Orbit Hub] Failed to read installed plugins from desktop storage.', error);
+    return null;
+  }
+}
+
+async function persistInstalledPlugins(installedPlugins: InstalledPlugin[]): Promise<void> {
+  const payload = JSON.stringify(installedPlugins);
+  const desktopBridge = window.__ORBIT_DESKTOP__;
+
+  if (desktopBridge) {
+    try {
+      await desktopBridge.installedPlugins.set(payload);
+      return;
+    } catch (error) {
+      console.warn('[Orbit Hub] Failed to write installed plugins to desktop storage.', error);
+    }
+  }
+
+  localStorage.setItem(INSTALLED_PLUGINS_STORAGE_KEY, payload);
+}
+
 const HUB_PANES: Array<{ id: StaticHubPane; title: string; tagline: string }> = [
   {
     id: 'workspace',
@@ -104,9 +138,8 @@ export default function App() {
   const [pluginId, setPluginId] = useState('hello-plugin');
   const [sourceUrl, setSourceUrl] = useState(DEFAULT_PLUGIN_URL);
   const [activePlugin, setActivePlugin] = useState<ActivePlugin | null>(null);
-  const [installedPlugins, setInstalledPlugins] = useState<InstalledPlugin[]>(() =>
-    loadInstalledPlugins()
-  );
+  const [installedPlugins, setInstalledPlugins] = useState<InstalledPlugin[]>([]);
+  const [isInstalledPluginsHydrated, setIsInstalledPluginsHydrated] = useState(false);
   const [validationError, setValidationError] = useState('');
   const [probeMessage, setProbeMessage] = useState('');
   const [isProbing, setIsProbing] = useState(false);
@@ -125,8 +158,32 @@ export default function App() {
   const isPluginPaneActive = activeInstalledPlugin !== null;
 
   useEffect(() => {
-    localStorage.setItem(INSTALLED_PLUGINS_STORAGE_KEY, JSON.stringify(installedPlugins));
-  }, [installedPlugins]);
+    let isCancelled = false;
+
+    void (async () => {
+      const desktopPlugins = await loadInstalledPluginsFromDesktopBridge();
+      const nextPlugins = desktopPlugins ?? loadInstalledPluginsFromLocalStorage();
+
+      if (isCancelled) {
+        return;
+      }
+
+      setInstalledPlugins(nextPlugins);
+      setIsInstalledPluginsHydrated(true);
+    })();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isInstalledPluginsHydrated) {
+      return;
+    }
+
+    void persistInstalledPlugins(installedPlugins);
+  }, [installedPlugins, isInstalledPluginsHydrated]);
 
   useEffect(() => {
     const activeId = activeInstalledPlugin?.id;
