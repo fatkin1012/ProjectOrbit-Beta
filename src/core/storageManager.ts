@@ -380,3 +380,20 @@ export async function getPluginCode(id: string): Promise<string | null> {
   const record = await db.get(CODE_STORE, id);
   return record?.code ?? null;
 }
+
+export async function clearPluginCodeCache(): Promise<number> {
+  const db = await getDb();
+  const keys = await db.getAllKeys(CODE_STORE);
+
+  if (keys.length === 0) {
+    return 0;
+  }
+
+  const tx = db.transaction(CODE_STORE, 'readwrite');
+  for (const key of keys) {
+    await tx.store.delete(key);
+  }
+
+  await tx.done;
+  return keys.length;
+}

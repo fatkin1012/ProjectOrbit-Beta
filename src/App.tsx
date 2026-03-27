@@ -4,6 +4,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { PluginContainer } from './components/PluginContainer';
 import { installAndLoadPlugin, normalizePluginSourceUrl } from './core/pluginLoader';
 import {
+  clearPluginCodeCache,
   clearStorageAuditRecords,
   getStorageAuditRecords,
   runStorageProbe,
@@ -147,6 +148,7 @@ export default function App() {
   const [isInstalling, setIsInstalling] = useState(false);
   const [probeMessage, setProbeMessage] = useState('');
   const [isProbing, setIsProbing] = useState(false);
+  const [isClearingPluginCache, setIsClearingPluginCache] = useState(false);
   const [auditRecords, setAuditRecords] = useState<StorageAuditRecord[]>([]);
   const [updatingPluginId, setUpdatingPluginId] = useState<string | null>(null);
 
@@ -243,6 +245,24 @@ export default function App() {
   function handleClearAudit(): void {
     clearStorageAuditRecords();
     setAuditRecords([]);
+  }
+
+  async function handleClearPluginCache(): Promise<void> {
+    setIsClearingPluginCache(true);
+
+    try {
+      const removed = await clearPluginCodeCache();
+      setProbeMessage(
+        removed > 0
+          ? `Cleared plugin cache entries: ${removed}.`
+          : 'Plugin cache is already empty.'
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown cache clear error.';
+      setProbeMessage(`Failed to clear plugin cache: ${message}`);
+    } finally {
+      setIsClearingPluginCache(false);
+    }
   }
 
   function upsertInstalledPluginFromRuntime(
@@ -558,6 +578,14 @@ export default function App() {
                   <div className="ops-actions">
                     <button type="button" className="host-btn" onClick={handleRunProbe} disabled={isProbing}>
                       {isProbing ? 'Running Probe...' : 'Run DB Probe'}
+                    </button>
+                    <button
+                      type="button"
+                      className="host-btn"
+                      onClick={handleClearPluginCache}
+                      disabled={isClearingPluginCache}
+                    >
+                      {isClearingPluginCache ? 'Clearing Plugin Cache...' : 'Clear Plugin Cache'}
                     </button>
                     <button type="button" className="host-btn inline-delete-btn" onClick={handleClearAudit}>
                       Clear Audit
