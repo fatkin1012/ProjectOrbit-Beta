@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { IPlugin } from '@toolbox/sdk';
 import { createAppContext } from '../core/contextFactory';
 import { installAndLoadPlugin } from '../core/pluginLoader';
+import { ensureStorageReady } from '../core/storageManager';
 
 interface PluginContainerProps {
   pluginId: string;
@@ -92,12 +93,19 @@ export function PluginContainer({
 
         await waitForMountReady(mountPoint);
 
+        // Ensure storage is ready before mounting plugin
+        const storageReady = await ensureStorageReady();
+        if (!storageReady) {
+          console.warn(`${CONTAINER_LOG_PREFIX} storage initialization failed, continuing with degraded storage support`);
+        }
+
         const beforeMountStylesheetCount = getStylesheetCount();
         console.info(`${CONTAINER_LOG_PREFIX} mount start`, {
           pluginId,
           beforeMountStylesheetCount,
           mountWidth: mountPoint.clientWidth,
-          mountHeight: mountPoint.clientHeight
+          mountHeight: mountPoint.clientHeight,
+          storageReady
         });
 
         const context = createAppContext(pluginId);

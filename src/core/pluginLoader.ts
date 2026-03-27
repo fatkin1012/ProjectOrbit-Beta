@@ -217,6 +217,41 @@ function toErrorMessage(error: unknown): string {
 
 type BundleProfile = 'kanban-modern' | 'task-board-legacy' | 'unknown';
 
+export function normalizePluginSourceUrl(inputUrl: string): string {
+  const trimmed = inputUrl.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return trimmed;
+  }
+
+  const host = parsed.hostname.toLowerCase();
+  if (host !== 'github.com' && host !== 'www.github.com') {
+    return trimmed;
+  }
+
+  const pathParts = parsed.pathname.split('/').filter(Boolean);
+
+  // Convert GitHub file views to raw content URLs that can be fetched/imported directly.
+  if (pathParts.length >= 5 && (pathParts[2] === 'blob' || pathParts[2] === 'raw')) {
+    const owner = pathParts[0];
+    const repo = pathParts[1];
+    const ref = pathParts[3];
+    const filePath = pathParts.slice(4).join('/');
+
+    if (owner && repo && ref && filePath) {
+      return `https://raw.githubusercontent.com/${owner}/${repo}/${ref}/${filePath}`;
+    }
+  }
+
+  return trimmed;
+}
+
 function detectBundleProfile(jsCode: string): BundleProfile {
   if (/kanban-shell|board-sidebar|workspace-header/.test(jsCode)) {
     return 'kanban-modern';
@@ -234,7 +269,9 @@ export async function installAndLoadPlugin(
   pluginId: string,
   signal?: AbortSignal
 ): Promise<IPlugin> {
-  if (!url.trim()) {
+  const normalizedUrl = normalizePluginSourceUrl(url);
+
+  if (!normalizedUrl.trim()) {
     throw new Error('Plugin URL cannot be empty.');
   }
 
@@ -246,10 +283,10 @@ export async function installAndLoadPlugin(
   let moduleExports: Record<string, unknown> | null = null;
   let importedFromUrl: string | null = null;
 
-  debugLog('installAndLoadPlugin start', { pluginId, url });
+  debugLog('installAndLoadPlugin start', { pluginId, url, normalizedUrl });
 
   try {
-    const response = await fetch(url, {
+    const response = await fetch(normalizedUrl, {
       signal,
       cache: 'no-store'
     });
@@ -283,7 +320,7 @@ export async function installAndLoadPlugin(
     await savePluginCode(pluginId, jsCode);
     debugLog('plugin source cached to storage', { pluginId, chars: jsCode.length });
 
-    const importCandidates = getImportUrlCandidates(url);
+    const importCandidates = getImportUrlCandidates(normalizedUrl);
     debugLog('trying URL import candidates', { pluginId, importCandidates });
 
     let lastImportError: unknown = null;
@@ -366,10 +403,6 @@ export async function installAndLoadPlugin(
       `[PluginLoader] Plugin "${pluginId}" is missing optional metadata (name/version). ` +
         'Using fallback defaults.'
     );
-  }
-
-  if (plugin.id !== pluginId) {
-    throw new Error(`Plugin id mismatch: expected "${pluginId}", received "${plugin.id}".`);
   }
 
   debugLog('plugin contract validated', {

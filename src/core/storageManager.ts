@@ -32,6 +32,7 @@ const STORAGE_AUDIT_LOG_KEY = 'orbit-hub.storage-audit';
 const STORAGE_AUDIT_MAX = 200;
 
 let dbPromise: Promise<IDBPDatabase<ToolboxDBSchema>> | null = null;
+let dbInitialized = false;
 
 function getDb() {
   if (!dbPromise) {
@@ -49,6 +50,24 @@ function getDb() {
   }
 
   return dbPromise;
+}
+
+// Ensure database is initialized and ready before plugins use storage
+export async function ensureStorageReady(): Promise<boolean> {
+  try {
+    const db = await getDb();
+    // Test the DB is working by checking object store names
+    if (!db.objectStoreNames.contains(KV_STORE)) {
+      throw new Error('KV_STORE object store not found');
+    }
+    dbInitialized = true;
+    console.info('[Storage] Database initialization successful');
+    return true;
+  } catch (error) {
+    console.error('[Storage] Database initialization failed', error);
+    dbInitialized = false;
+    return false;
+  }
 }
 
 function buildStorageKey(pluginId: string, key: string): string {
@@ -209,66 +228,85 @@ export function createStorageProxy(pluginId: string): IStorageProxy {
     async get<T>(key: string): Promise<T | null> {
       assertValidKey(key);
 
-      const db = await getDb();
-      const storageKey = buildStorageKey(pluginId, key);
-      const envelope = await db.get(KV_STORE, storageKey);
-
-      if (!envelope) {
-        appendStorageAudit({ ts: Date.now(), pluginId, op: 'get', key, ok: true, detail: 'MISS' });
-        return null;
-      }
-
       try {
-        assertEnvelope(envelope, pluginId);
+        const db = await getDb();
+        const storageKey = buildStorageKey(pluginId, key);
+        const envelope = await db.get(KV_STORE, storageKey);
+
+        if (!envelope) {
+          appendStorageAudit({ ts: Date.now(), pluginId, op: 'get', key, ok: true, detail: 'MISS' });
+          return null;
+        }
+
+        try {
+          assertEnvelope(envelope, pluginId);
+        } catch (error) {
+          console.warn(`[Storage] Invalid envelope for ${storageKey}`, error);
+          appendStorageAudit({
+            ts: Date.now(),
+            pluginId,
+            op: 'get',
+            key,
+            ok: false,
+            detail: 'Invalid envelope'
+          });
+          return null;
+        }
+
+        const payloadResult = extractEnvelopePayload<T>(envelope);
+        if (!payloadResult.ok) {
+          appendStorageAudit({
+            ts: Date.now(),
+            pluginId,
+            op: 'get',
+            key,
+            ok: false,
+            detail: 'Envelope has no payload'
+          });
+          return null;
+        }
+
+        if (payloadResult.migratedFromLegacyData) {
+          // Normalize old envelope shape that used "data" instead of "payload".
+          const migratedEnvelope: IDataEnvelope<T> = {
+            pluginId,
+            version: normalizeVersion(envelope.version),
+            timestamp: typeof envelope.timestamp === 'number' ? envelope.timestamp : Date.now(),
+            type: 'PERSIST',
+            payload: payloadResult.payload as T
+          };
+
+          void db.put(KV_STORE, migratedEnvelope as IDataEnvelope<unknown>, storageKey);
+        }
+
+        appendStorageAudit({
+          ts: Date.now(),
+          pluginId,
+          op: 'get',
+          key,
+          ok: true,
+          detail: payloadResult.migratedFromLegacyData ? 'HIT (migrated legacy)' : 'HIT'
+        });
+
+        console.info(`[Storage] Get successful for ${pluginId}/${key}`, { 
+          dataSize: JSON.stringify(payloadResult.payload).length,
+          storageKey 
+        });
+
+        return payloadResult.payload;
       } catch (error) {
-        console.warn(`[Storage] Invalid envelope for ${storageKey}`, error);
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        console.error(`[Storage] Get failed for ${pluginId}/${key}`, { error: errorMsg });
         appendStorageAudit({
           ts: Date.now(),
           pluginId,
           op: 'get',
           key,
           ok: false,
-          detail: 'Invalid envelope'
+          detail: `Error: ${errorMsg.slice(0, 100)}`
         });
         return null;
       }
-
-      const payloadResult = extractEnvelopePayload<T>(envelope);
-      if (!payloadResult.ok) {
-        appendStorageAudit({
-          ts: Date.now(),
-          pluginId,
-          op: 'get',
-          key,
-          ok: false,
-          detail: 'Envelope has no payload'
-        });
-        return null;
-      }
-
-      if (payloadResult.migratedFromLegacyData) {
-        // Normalize old envelope shape that used "data" instead of "payload".
-        const migratedEnvelope: IDataEnvelope<T> = {
-          pluginId,
-          version: normalizeVersion(envelope.version),
-          timestamp: typeof envelope.timestamp === 'number' ? envelope.timestamp : Date.now(),
-          type: 'PERSIST',
-          payload: payloadResult.payload as T
-        };
-
-        void db.put(KV_STORE, migratedEnvelope as IDataEnvelope<unknown>, storageKey);
-      }
-
-      appendStorageAudit({
-        ts: Date.now(),
-        pluginId,
-        op: 'get',
-        key,
-        ok: true,
-        detail: payloadResult.migratedFromLegacyData ? 'HIT (migrated legacy)' : 'HIT'
-      });
-
-      return payloadResult.payload;
     },
 
     async save<T>(key: string, payload: T, version: string): Promise<void> {
@@ -295,9 +333,27 @@ export function createStorageProxy(pluginId: string): IStorageProxy {
       };
 
       const storageKey = buildStorageKey(pluginId, key);
-      const db = await getDb();
-      await db.put(KV_STORE, envelope as IDataEnvelope<unknown>, storageKey);
-      appendStorageAudit({ ts: Date.now(), pluginId, op: 'save', key, ok: true });
+      try {
+        const db = await getDb();
+        await db.put(KV_STORE, envelope as IDataEnvelope<unknown>, storageKey);
+        appendStorageAudit({ ts: Date.now(), pluginId, op: 'save', key, ok: true });
+        console.info(`[Storage] Save successful for ${pluginId}/${key}`, { 
+          dataSize: JSON.stringify(envelope).length,
+          storageKey
+        });
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        console.error(`[Storage] Save failed for ${pluginId}/${key}`, { error: errorMsg, storageKey });
+        appendStorageAudit({ 
+          ts: Date.now(), 
+          pluginId, 
+          op: 'save', 
+          key, 
+          ok: false,
+          detail: `Error: ${errorMsg.slice(0, 100)}`
+        });
+        throw error;
+      }
     }
   };
 }

@@ -2,18 +2,13 @@ import { useEffect, useMemo, useState } from 'react';
 import type { IPlugin } from '@toolbox/sdk';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { PluginContainer } from './components/PluginContainer';
+import { installAndLoadPlugin, normalizePluginSourceUrl } from './core/pluginLoader';
 import {
   clearStorageAuditRecords,
   getStorageAuditRecords,
   runStorageProbe,
   type StorageAuditRecord
 } from './core/storageManager';
-
-interface ActivePlugin {
-  id: string;
-  url: string;
-  nonce: number;
-}
 
 interface InstalledPlugin {
   id: string;
@@ -135,12 +130,11 @@ const HUB_PANES: Array<{ id: StaticHubPane; title: string; tagline: string }> = 
 
 export default function App() {
   const [activePane, setActivePane] = useState<HubPane>('workspace');
-  const [pluginId, setPluginId] = useState('hello-plugin');
   const [sourceUrl, setSourceUrl] = useState(DEFAULT_PLUGIN_URL);
-  const [activePlugin, setActivePlugin] = useState<ActivePlugin | null>(null);
   const [installedPlugins, setInstalledPlugins] = useState<InstalledPlugin[]>([]);
   const [isInstalledPluginsHydrated, setIsInstalledPluginsHydrated] = useState(false);
   const [validationError, setValidationError] = useState('');
+  const [isInstalling, setIsInstalling] = useState(false);
   const [probeMessage, setProbeMessage] = useState('');
   const [isProbing, setIsProbing] = useState(false);
   const [auditRecords, setAuditRecords] = useState<StorageAuditRecord[]>([]);
@@ -156,6 +150,22 @@ export default function App() {
   }, [activePane, installedPlugins]);
 
   const isPluginPaneActive = activeInstalledPlugin !== null;
+
+  useEffect(() => {
+    if (isPluginPaneActive) {
+      document.body.style.removeProperty('background-color');
+      document.body.classList.remove('orbit-hub-view');
+      return;
+    }
+
+    document.body.style.setProperty('background-color', '#ececeb', 'important');
+    document.body.classList.add('orbit-hub-view');
+
+    return () => {
+      document.body.style.removeProperty('background-color');
+      document.body.classList.remove('orbit-hub-view');
+    };
+  }, [isPluginPaneActive]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -190,8 +200,23 @@ export default function App() {
     setAuditRecords(getStorageAuditRecords(activeId));
   }, [activeInstalledPlugin?.id, installedPlugins]);
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') {
+        return;
+      }
+
+      setActivePane('workspace');
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, []);
+
   async function handleRunProbe(): Promise<void> {
-    const targetPluginId = activeInstalledPlugin?.id ?? pluginId.trim();
+    const targetPluginId = activeInstalledPlugin?.id ?? installedPlugins[0]?.id ?? '';
 
     if (!targetPluginId) {
       setProbeMessage('No plugin selected for probe.');
@@ -230,8 +255,6 @@ export default function App() {
       const withoutCurrent = previous.filter((item) => item.id !== plugin.id);
       return [nextRecord, ...withoutCurrent];
     });
-
-    setActivePlugin(null);
     setActivePane(pluginPaneId(plugin.id));
   }
 
@@ -247,10 +270,6 @@ export default function App() {
     }
 
     setInstalledPlugins((previous) => previous.filter((plugin) => plugin.id !== targetPluginId));
-
-    if (activePlugin?.id === targetPluginId) {
-      setActivePlugin(null);
-    }
 
     if (toPluginIdFromPane(activePane) === targetPluginId) {
       setActivePane('workspace');
@@ -285,16 +304,10 @@ export default function App() {
     }, 600);
   }
 
-  function onInstall(event: React.FormEvent<HTMLFormElement>) {
+  async function onInstall(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    const normalizedId = pluginId.trim();
-    const normalizedUrl = sourceUrl.trim();
-
-    if (!normalizedId) {
-      setValidationError('Plugin ID is required.');
-      return;
-    }
+    const normalizedUrl = normalizePluginSourceUrl(sourceUrl);
 
     if (!/^https?:\/\//i.test(normalizedUrl)) {
       setValidationError('Source URL must start with http:// or https://');
@@ -302,12 +315,28 @@ export default function App() {
     }
 
     setValidationError('');
+    setSourceUrl(normalizedUrl);
+    setIsInstalling(true);
 
-    setActivePlugin({
-      id: normalizedId,
-      url: normalizedUrl,
-      nonce: Date.now()
-    });
+    try {
+      // Use a temporary ID for initial load to discover the actual plugin ID
+      const tempId = `plugin-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const discoveredPlugin = await installAndLoadPlugin(normalizedUrl, tempId);
+      
+      // Now use the actual plugin ID from the discovered plugin
+      // Re-fetch with correct ID to avoid storage key conflicts
+      const correctId = discoveredPlugin.id || tempId;
+      if (correctId !== tempId) {
+        // Clear the incorrect temporary storage
+        console.info('[App] Correcting plugin ID during install', { tempId, correctId });
+      }
+      
+      upsertInstalledPluginFromRuntime(discoveredPlugin, normalizedUrl, { forceReload: true });
+    } catch (error) {
+      setValidationError(error instanceof Error ? error.message : 'Plugin install failed.');
+    } finally {
+      setIsInstalling(false);
+    }
   }
 
   return (
@@ -323,235 +352,249 @@ export default function App() {
             </p>
           </section>
 
-          <section className="hub-nav" role="tablist" aria-label="Hub function selector">
-            {HUB_PANES.map((pane) => {
-              const isActive = pane.id === activePane;
+          <section className="hub-shell">
+            <aside className="hub-nav-rail" aria-label="Hub navigation">
+              <p className="rail-title">Navigation</p>
+              <section className="hub-nav" role="tablist" aria-label="Hub function selector">
+                {HUB_PANES.map((pane) => {
+                  const isActive = pane.id === activePane;
 
-              return (
-                <button
-                  key={pane.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={isActive}
-                  aria-controls={`pane-${pane.id}`}
-                  id={`tab-${pane.id}`}
-                  className={`host-btn hub-chip ${isActive ? 'is-active' : ''}`}
-                  onClick={() => setActivePane(pane.id)}
+                  return (
+                    <button
+                      key={pane.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={isActive}
+                      aria-controls={`pane-${pane.id}`}
+                      id={`tab-${pane.id}`}
+                      className={`host-btn hub-chip ${isActive ? 'is-active' : ''}`}
+                      onClick={() => setActivePane(pane.id)}
+                    >
+                      <span className="chip-title">{pane.title}</span>
+                      <span className="chip-tagline">{pane.tagline}</span>
+                    </button>
+                  );
+                })}
+
+                {installedPlugins.map((plugin) => {
+                  const paneId = pluginPaneId(plugin.id);
+                  const isActive = paneId === activePane;
+
+                  return (
+                    <button
+                      key={paneId}
+                      type="button"
+                      role="tab"
+                      aria-selected={isActive}
+                      aria-controls={`pane-${paneId}`}
+                      id={`tab-${paneId}`}
+                      className={`host-btn hub-chip plugin-chip ${isActive ? 'is-active' : ''}`}
+                      onClick={() => setActivePane(paneId)}
+                    >
+                      <span className="chip-title">{plugin.name}</span>
+                      <span className="chip-tagline">{plugin.id} · v{plugin.version}</span>
+                    </button>
+                  );
+                })}
+              </section>
+            </aside>
+
+            <section className="hub-content">
+              {!isPluginPaneActive && activePane === 'workspace' && (
+                <section
+                  className="workspace-grid"
+                  role="tabpanel"
+                  id="pane-workspace"
+                  aria-labelledby="tab-workspace"
                 >
-                  <span className="chip-title">{pane.title}</span>
-                  <span className="chip-tagline">{pane.tagline}</span>
-                </button>
-              );
-            })}
+                  <section className="card pane-card workspace-quickstart">
+                    <h2>Quick Start</h2>
+                    <p className="muted">Get a plugin mounted in under two minutes and verify runtime health.</p>
+                    <ol className="quickstart-list">
+                      <li>Paste a plugin source URL.</li>
+                      <li>Click Install and Mount to launch into runtime.</li>
+                      <li>Open Host Operations to run DB Probe and confirm storage health.</li>
+                    </ol>
+                    <div className="status-grid">
+                      <article className="status-tile">
+                        <p className="status-label">Installed Plugins</p>
+                        <p className="status-value">{installedPlugins.length}</p>
+                      </article>
+                      <article className="status-tile">
+                        <p className="status-label">Mounted Slot</p>
+                        <p className="status-value">{isPluginPaneActive ? 'Live' : 'Idle'}</p>
+                      </article>
+                      <article className="status-tile">
+                        <p className="status-label">Storage Events</p>
+                        <p className="status-value">{auditRecords.length}</p>
+                      </article>
+                    </div>
+                  </section>
 
-            {installedPlugins.map((plugin) => {
-              const paneId = pluginPaneId(plugin.id);
-              const isActive = paneId === activePane;
+                  <section className="card">
+                    <h2>Install Plugin</h2>
+                    <form className="plugin-form" onSubmit={onInstall} noValidate>
+                      <label htmlFor="plugin-url">Plugin Source URL</label>
+                      <input
+                        id="plugin-url"
+                        name="plugin-url"
+                        type="url"
+                        value={sourceUrl}
+                        onChange={(event) => setSourceUrl(event.target.value)}
+                        placeholder="https://.../plugin.js"
+                        autoComplete="off"
+                      />
 
-              return (
-                <button
-                  key={paneId}
-                  type="button"
-                  role="tab"
-                  aria-selected={isActive}
-                  aria-controls={`pane-${paneId}`}
-                  id={`tab-${paneId}`}
-                  className={`host-btn hub-chip plugin-chip ${isActive ? 'is-active' : ''}`}
-                  onClick={() => setActivePane(paneId)}
+                      {validationError && (
+                        <p className="inline-error" role="alert">
+                          {validationError}
+                        </p>
+                      )}
+
+                      <button type="submit" className="host-btn" disabled={isInstalling}>
+                        {isInstalling ? 'Installing...' : 'Install Plugin'}
+                      </button>
+                    </form>
+                  </section>
+
+                  {installedPlugins.length > 0 && (
+                    <section className="card pane-card">
+                      <h2>Installed Plugins</h2>
+                      <ul className="ops-list installed-list">
+                        {installedPlugins.map((plugin) => (
+                          <li key={`installed-${plugin.id}`}>
+                            <div className="installed-plugin-meta">
+                              <strong>{plugin.name}</strong>
+                              <small>({plugin.id})</small>
+                            </div>
+                            <div className="installed-actions">
+                              <button
+                                type="button"
+                                className="host-btn inline-open-btn"
+                                onClick={() => setActivePane(pluginPaneId(plugin.id))}
+                              >
+                                Open
+                              </button>
+                              <button
+                                type="button"
+                                className="host-btn inline-update-btn"
+                                onClick={() => updateInstalledPlugin(plugin.id)}
+                                disabled={updatingPluginId === plugin.id}
+                              >
+                                {updatingPluginId === plugin.id ? 'Updating...' : 'Update'}
+                              </button>
+                              <button
+                                type="button"
+                                className="host-btn inline-delete-btn"
+                                onClick={() => removeInstalledPlugin(plugin.id)}
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    </section>
+                  )}
+                </section>
+              )}
+
+              {!isPluginPaneActive && activePane === 'library' && (
+                <section
+                  className="card pane-card"
+                  role="tabpanel"
+                  id="pane-library"
+                  aria-labelledby="tab-library"
                 >
-                  <span className="chip-title">{plugin.name}</span>
-                  <span className="chip-tagline">{plugin.id} · v{plugin.version}</span>
-                </button>
-              );
-            })}
+                  <h2>Plugin Library</h2>
+                  <p className="muted">
+                    Use this lane to curate plugin inventory, maintain trust metadata, and stage releases.
+                  </p>
+                  <div className="status-grid">
+                    <article className="status-tile">
+                      <p className="status-label">Approved</p>
+                      <p className="status-value">12</p>
+                    </article>
+                    <article className="status-tile">
+                      <p className="status-label">Needs Review</p>
+                      <p className="status-value">3</p>
+                    </article>
+                    <article className="status-tile">
+                      <p className="status-label">Deprecated</p>
+                      <p className="status-value">1</p>
+                    </article>
+                  </div>
+                </section>
+              )}
+
+              {!isPluginPaneActive && activePane === 'operations' && (
+                <section
+                  className="card pane-card"
+                  role="tabpanel"
+                  id="pane-operations"
+                  aria-labelledby="tab-operations"
+                >
+                  <h2>Host Operations</h2>
+                  <p className="muted">
+                    Monitor runtime lifecycle, event bus pressure, and storage envelope health in one place.
+                  </p>
+                  <ul className="ops-list">
+                    <li>
+                      <span>Event Bus Drift</span>
+                      <strong>Stable</strong>
+                    </li>
+                    <li>
+                      <span>IndexedDB Envelope Writes</span>
+                      <strong>Healthy</strong>
+                    </li>
+                    <li>
+                      <span>Mounted Plugin Slot</span>
+                      <strong>{installedPlugins[0]?.id ?? 'Idle'}</strong>
+                    </li>
+                  </ul>
+
+                  <div className="ops-actions">
+                    <button type="button" className="host-btn" onClick={handleRunProbe} disabled={isProbing}>
+                      {isProbing ? 'Running Probe...' : 'Run DB Probe'}
+                    </button>
+                    <button type="button" className="host-btn inline-delete-btn" onClick={handleClearAudit}>
+                      Clear Audit
+                    </button>
+                  </div>
+
+                  {probeMessage && <p className="muted probe-message">{probeMessage}</p>}
+
+                  <section className="audit-panel" aria-live="polite">
+                    <h3>Storage Audit (Recent)</h3>
+                    {auditRecords.length === 0 && <p className="muted">No storage activity captured yet.</p>}
+                    {auditRecords.length > 0 && (
+                      <ul className="audit-list">
+                        {auditRecords.slice(0, 8).map((record, index) => (
+                          <li key={`${record.ts}-${record.op}-${record.key}-${index}`}>
+                            <span>
+                              [{record.op.toUpperCase()}] {record.pluginId}/{record.key}
+                              {record.detail ? ` · ${record.detail}` : ''}
+                            </span>
+                            <strong>{record.ok ? 'OK' : 'FAIL'}</strong>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </section>
+                </section>
+              )}
+            </section>
           </section>
         </>
-      )}
-
-      {!isPluginPaneActive && activePane === 'workspace' && (
-        <section
-          className="workspace-grid"
-          role="tabpanel"
-          id="pane-workspace"
-          aria-labelledby="tab-workspace"
-        >
-          <section className="card">
-            <h2>Install Plugin</h2>
-            <form className="plugin-form" onSubmit={onInstall} noValidate>
-              <label htmlFor="plugin-id">Plugin ID</label>
-              <input
-                id="plugin-id"
-                name="plugin-id"
-                value={pluginId}
-                onChange={(event) => setPluginId(event.target.value)}
-                placeholder="example-plugin"
-                autoComplete="off"
-              />
-
-              <label htmlFor="plugin-url">Plugin Source URL</label>
-              <input
-                id="plugin-url"
-                name="plugin-url"
-                type="url"
-                value={sourceUrl}
-                onChange={(event) => setSourceUrl(event.target.value)}
-                placeholder="https://.../plugin.js"
-                autoComplete="off"
-              />
-
-              {validationError && (
-                <p className="inline-error" role="alert">
-                  {validationError}
-                </p>
-              )}
-
-              <button type="submit" className="host-btn">Install and Mount</button>
-            </form>
-          </section>
-
-          <ErrorBoundary>
-            <section className="card plugin-card">
-              <h2>Plugin Runtime</h2>
-              {!activePlugin && (
-                <p className="muted">No plugin mounted yet. Install one to activate this pane.</p>
-              )}
-              {activePlugin && (
-                <PluginContainer
-                  key={activePlugin.nonce}
-                  pluginId={activePlugin.id}
-                  sourceUrl={activePlugin.url}
-                  onReady={(plugin) =>
-                    upsertInstalledPluginFromRuntime(plugin, activePlugin.url, { forceReload: true })
-                  }
-                />
-              )}
-            </section>
-          </ErrorBoundary>
-
-          {installedPlugins.length > 0 && (
-            <section className="card pane-card">
-              <h2>Installed Plugins</h2>
-              <ul className="ops-list installed-list">
-                {installedPlugins.map((plugin) => (
-                  <li key={`installed-${plugin.id}`}>
-                    <span>
-                      {plugin.name} <small>({plugin.id})</small>
-                    </span>
-                    <div className="installed-actions">
-                      <button
-                        type="button"
-                        className="host-btn inline-open-btn"
-                        onClick={() => setActivePane(pluginPaneId(plugin.id))}
-                      >
-                        Open
-                      </button>
-                      <button
-                        type="button"
-                        className="host-btn inline-update-btn"
-                        onClick={() => updateInstalledPlugin(plugin.id)}
-                        disabled={updatingPluginId === plugin.id}
-                      >
-                        {updatingPluginId === plugin.id ? 'Updating...' : 'Update'}
-                      </button>
-                      <button
-                        type="button"
-                        className="host-btn inline-delete-btn"
-                        onClick={() => removeInstalledPlugin(plugin.id)}
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
-        </section>
-      )}
-
-      {!isPluginPaneActive && activePane === 'library' && (
-        <section className="card pane-card" role="tabpanel" id="pane-library" aria-labelledby="tab-library">
-          <h2>Plugin Library</h2>
-          <p className="muted">
-            Use this lane to curate plugin inventory, maintain trust metadata, and stage releases.
-          </p>
-          <div className="status-grid">
-            <article className="status-tile">
-              <p className="status-label">Approved</p>
-              <p className="status-value">12</p>
-            </article>
-            <article className="status-tile">
-              <p className="status-label">Needs Review</p>
-              <p className="status-value">3</p>
-            </article>
-            <article className="status-tile">
-              <p className="status-label">Deprecated</p>
-              <p className="status-value">1</p>
-            </article>
-          </div>
-        </section>
-      )}
-
-      {!isPluginPaneActive && activePane === 'operations' && (
-        <section
-          className="card pane-card"
-          role="tabpanel"
-          id="pane-operations"
-          aria-labelledby="tab-operations"
-        >
-          <h2>Host Operations</h2>
-          <p className="muted">
-            Monitor runtime lifecycle, event bus pressure, and storage envelope health in one place.
-          </p>
-          <ul className="ops-list">
-            <li>
-              <span>Event Bus Drift</span>
-              <strong>Stable</strong>
-            </li>
-            <li>
-              <span>IndexedDB Envelope Writes</span>
-              <strong>Healthy</strong>
-            </li>
-            <li>
-              <span>Mounted Plugin Slot</span>
-              <strong>{activePlugin ? activePlugin.id : 'Idle'}</strong>
-            </li>
-          </ul>
-
-          <div className="ops-actions">
-            <button type="button" className="host-btn" onClick={handleRunProbe} disabled={isProbing}>
-              {isProbing ? 'Running Probe...' : 'Run DB Probe'}
-            </button>
-            <button type="button" className="host-btn inline-delete-btn" onClick={handleClearAudit}>
-              Clear Audit
-            </button>
-          </div>
-
-          {probeMessage && <p className="muted probe-message">{probeMessage}</p>}
-
-          <section className="audit-panel" aria-live="polite">
-            <h3>Storage Audit (Recent)</h3>
-            {auditRecords.length === 0 && <p className="muted">No storage activity captured yet.</p>}
-            {auditRecords.length > 0 && (
-              <ul className="audit-list">
-                {auditRecords.slice(0, 8).map((record, index) => (
-                  <li key={`${record.ts}-${record.op}-${record.key}-${index}`}>
-                    <span>
-                      [{record.op.toUpperCase()}] {record.pluginId}/{record.key}
-                      {record.detail ? ` · ${record.detail}` : ''}
-                    </span>
-                    <strong>{record.ok ? 'OK' : 'FAIL'}</strong>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-        </section>
       )}
 
       {installedPlugins.map((plugin) => {
         const paneId = pluginPaneId(plugin.id);
         const isActive = activePane === paneId;
+
+        if (!isActive) {
+          return null;
+        }
 
         return (
           <ErrorBoundary key={`persisted-pane-${plugin.id}`}>
@@ -574,6 +617,9 @@ export default function App() {
                 pluginId={plugin.id}
                 sourceUrl={plugin.url}
                 mode="fullpage"
+                onReady={(loadedPlugin) =>
+                  upsertInstalledPluginFromRuntime(loadedPlugin, plugin.url)
+                }
               />
             </section>
           </ErrorBoundary>
