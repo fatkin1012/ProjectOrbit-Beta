@@ -57,11 +57,12 @@ body.orbit-hub-view #root {
 }
 
 .page-shell {
-  width: min(100%, 1040px);
+  width: min(100%, 1220px);
   margin: 0 auto;
-  padding: clamp(1rem, 4vw, 2.5rem) clamp(0.9rem, 3.2vw, 1.35rem) clamp(2.5rem, 7vw, 4rem);
+  padding: clamp(0.85rem, 3.2vw, 1.8rem) clamp(0.85rem, 2.4vw, 1.15rem)
+    clamp(1.8rem, 5vw, 2.8rem);
   display: grid;
-  gap: clamp(0.8rem, 2.8vw, 1.2rem);
+  gap: clamp(0.65rem, 2vw, 0.95rem);
 }
 
 .page-shell-plugin-active {
@@ -81,7 +82,7 @@ body.orbit-hub-view #root {
 }
 
 .hero {
-  padding: clamp(1rem, 3.5vw, 1.6rem);
+  padding: clamp(0.85rem, 2.8vw, 1.15rem);
 }
 
 .eyebrow {
@@ -113,20 +114,20 @@ body.orbit-hub-view #root {
 }
 
 .card {
-  padding: clamp(1rem, 3.2vw, 1.4rem);
+  padding: clamp(0.85rem, 2.6vw, 1.1rem);
   box-shadow: var(--shadow-2);
 }
 
 .hero-copy,
 .muted {
-  margin: var(--space-3) 0 0;
+  margin: var(--space-2) 0 0;
   color: var(--color-text-muted);
-  line-height: 1.6;
+  line-height: 1.5;
 }
 
 .hub-shell {
   display: grid;
-  gap: var(--space-4);
+  gap: var(--space-3);
 }
 
 .hub-nav-rail {
@@ -134,7 +135,7 @@ body.orbit-hub-view #root {
   border-radius: var(--radius-xl);
   background: color-mix(in srgb, var(--color-bg-elev) 98%, var(--color-bg-soft));
   box-shadow: var(--shadow-1);
-  padding: var(--space-4);
+  padding: var(--space-3);
 }
 
 .rail-title {
@@ -148,12 +149,12 @@ body.orbit-hub-view #root {
 
 .hub-content {
   display: grid;
-  gap: var(--space-4);
+  gap: var(--space-3);
 }
 
 .hub-nav {
   display: grid;
-  gap: var(--space-3);
+  gap: var(--space-2);
   grid-template-columns: 1fr;
 }
 
@@ -201,7 +202,7 @@ body.orbit-hub-view #root {
 
 .workspace-grid {
   display: grid;
-  gap: var(--space-4);
+  gap: var(--space-3);
 }
 
 .workspace-quickstart {
@@ -229,16 +230,16 @@ body.orbit-hub-view #root {
 }
 
 .status-grid {
-  margin-top: var(--space-4);
+  margin-top: var(--space-3);
   display: grid;
-  gap: var(--space-3);
+  gap: var(--space-2);
   grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
 }
 
 .status-tile {
   border-radius: var(--radius-md);
   border: 1px solid var(--color-border);
-  padding: 0.9rem;
+  padding: 0.72rem 0.78rem;
   background: var(--color-bg-soft);
 }
 
@@ -252,30 +253,30 @@ body.orbit-hub-view #root {
 }
 
 .status-value {
-  margin: 0.4rem 0 0;
-  font-size: 1.65rem;
+  margin: 0.28rem 0 0;
+  font-size: 1.44rem;
   line-height: 1;
   font-weight: 700;
 }
 
 .ops-list {
-  margin: var(--space-4) 0 0;
+  margin: var(--space-3) 0 0;
   padding: 0;
   list-style: none;
   display: grid;
-  gap: var(--space-3);
+  gap: var(--space-2);
 }
 
 .ops-list li {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   background: var(--color-bg-elev);
-  min-height: 48px;
-  padding: 0.72rem 0.8rem;
+  min-height: 44px;
+  padding: 0.62rem 0.72rem;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.7rem;
+  gap: 0.5rem;
 }
 
 .ops-list strong {
@@ -288,16 +289,37 @@ body.orbit-hub-view #root {
 
 .installed-list li {
   display: grid;
-  gap: var(--space-3);
+  gap: var(--space-2);
   align-items: center;
   justify-items: center;
   text-align: center;
+  align-content: space-between;
+  min-height: 140px;
+}
+
+.installed-list {
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.recent-activity-list {
+  grid-template-columns: 1fr;
+}
+
+.recent-activity-list li {
+  min-height: 72px;
+  grid-template-columns: 1fr auto;
+  justify-items: start;
+  text-align: left;
+}
+
+.recent-activity-list .installed-actions {
+  margin: 0;
 }
 
 .installed-plugin-meta {
   display: grid;
-  gap: 0.2rem;
-  justify-items: center;
+  gap: 0.15rem;
+  justify-items: start;
 }
 
 .installed-plugin-meta strong {
@@ -308,12 +330,12 @@ body.orbit-hub-view #root {
 
 .installed-actions {
   display: flex;
-  justify-content: center;
+  justify-content: flex-start;
   align-items: center;
-  gap: 0.45rem;
+  gap: 0.35rem;
   width: fit-content;
   max-width: 100%;
-  margin: 0 auto;
+  margin: 0;
 }
 
 .installed-actions .host-btn {
@@ -341,9 +363,9 @@ body.orbit-hub-view #root {
 }
 
 .ops-actions {
-  margin-top: var(--space-4);
+  margin-top: var(--space-3);
   display: flex;
-  gap: var(--space-3);
+  gap: var(--space-2);
   flex-wrap: wrap;
 }
 
@@ -352,11 +374,11 @@ body.orbit-hub-view #root {
 }
 
 .audit-panel {
-  margin-top: var(--space-4);
+  margin-top: var(--space-3);
   background: var(--color-bg-soft);
   border-radius: var(--radius-md);
   border: 1px solid var(--color-border);
-  padding: 0.9rem 1rem;
+  padding: 0.75rem 0.85rem;
 }
 
 .audit-panel h3 {
@@ -402,9 +424,9 @@ body.orbit-hub-view #root {
 }
 
 .plugin-form {
-  margin-top: var(--space-4);
+  margin-top: var(--space-3);
   display: grid;
-  gap: 0.65rem;
+  gap: 0.5rem;
 }
 
 .plugin-form label {
@@ -632,6 +654,16 @@ body.orbit-hub-view #root {
     text-align: center;
   }
 
+  .installed-list {
+    grid-template-columns: 1fr;
+  }
+
+  .recent-activity-list li {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    text-align: center;
+  }
+
   .ops-actions {
     width: 100%;
   }
@@ -652,7 +684,7 @@ body.orbit-hub-view #root {
 
 @media (min-width: 900px) {
   .hub-shell {
-    grid-template-columns: minmax(220px, 260px) 1fr;
+    grid-template-columns: minmax(230px, 250px) minmax(0, 1fr);
     align-items: start;
   }
 
@@ -670,12 +702,30 @@ body.orbit-hub-view #root {
   }
 
   .workspace-grid {
-    grid-template-columns: 1fr 1.12fr;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     align-items: start;
   }
 
   .workspace-quickstart {
+    grid-column: 1;
+  }
+
+  .workspace-install {
+    grid-column: 2;
+  }
+
+  .workspace-installed {
     grid-column: 1 / -1;
+  }
+}
+
+@media (min-width: 1180px) {
+  .installed-list {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .recent-activity-list {
+    grid-template-columns: 1fr;
   }
 }
 

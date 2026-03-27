@@ -22,7 +22,7 @@ interface InstalledPlugin {
 const DEFAULT_PLUGIN_URL =
   'https://raw.githubusercontent.com/example/toolbox-plugins/main/dist/hello-plugin.js';
 
-type StaticHubPane = 'workspace' | 'library' | 'operations';
+type StaticHubPane = 'workspace' | 'installed' | 'operations';
 type PluginHubPane = `plugin:${string}`;
 type HubPane = StaticHubPane | PluginHubPane;
 
@@ -117,9 +117,9 @@ const HUB_PANES: Array<{ id: StaticHubPane; title: string; tagline: string }> = 
     tagline: 'Install, mount, and iterate on a single plugin runtime.'
   },
   {
-    id: 'library',
-    title: 'Plugin Library',
-    tagline: 'Track available modules and compatibility readiness.'
+    id: 'installed',
+    title: 'Installed Plugins',
+    tagline: 'Browse and open installed plugin cards quickly.'
   },
   {
     id: 'operations',
@@ -127,6 +127,16 @@ const HUB_PANES: Array<{ id: StaticHubPane; title: string; tagline: string }> = 
     tagline: 'Observe runtime posture and local-first storage health.'
   }
 ];
+
+function formatLastActive(timestamp: number): string {
+  return new Intl.DateTimeFormat('zh-HK', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  }).format(new Date(timestamp));
+}
 
 export default function App() {
   const [activePane, setActivePane] = useState<HubPane>('workspace');
@@ -348,7 +358,7 @@ export default function App() {
             <h1>Project Orbit Toolbox Runtime</h1>
             <p className="hero-copy">
               One host, multiple capabilities. Choose a function lane below to jump between plugin
-              workspace actions, library governance, and runtime operations.
+              workspace actions, installed plugin access, and runtime operations.
             </p>
           </section>
 
@@ -372,27 +382,6 @@ export default function App() {
                     >
                       <span className="chip-title">{pane.title}</span>
                       <span className="chip-tagline">{pane.tagline}</span>
-                    </button>
-                  );
-                })}
-
-                {installedPlugins.map((plugin) => {
-                  const paneId = pluginPaneId(plugin.id);
-                  const isActive = paneId === activePane;
-
-                  return (
-                    <button
-                      key={paneId}
-                      type="button"
-                      role="tab"
-                      aria-selected={isActive}
-                      aria-controls={`pane-${paneId}`}
-                      id={`tab-${paneId}`}
-                      className={`host-btn hub-chip plugin-chip ${isActive ? 'is-active' : ''}`}
-                      onClick={() => setActivePane(paneId)}
-                    >
-                      <span className="chip-title">{plugin.name}</span>
-                      <span className="chip-tagline">{plugin.id} · v{plugin.version}</span>
                     </button>
                   );
                 })}
@@ -431,7 +420,7 @@ export default function App() {
                     </div>
                   </section>
 
-                  <section className="card">
+                  <section className="card workspace-install">
                     <h2>Install Plugin</h2>
                     <form className="plugin-form" onSubmit={onInstall} noValidate>
                       <label htmlFor="plugin-url">Plugin Source URL</label>
@@ -458,14 +447,16 @@ export default function App() {
                   </section>
 
                   {installedPlugins.length > 0 && (
-                    <section className="card pane-card">
-                      <h2>Installed Plugins</h2>
-                      <ul className="ops-list installed-list">
-                        {installedPlugins.map((plugin) => (
-                          <li key={`installed-${plugin.id}`}>
+                    <section className="card pane-card workspace-installed">
+                      <h2>Recent Activity</h2>
+                      <p className="muted">最近使用的 3 個插件。</p>
+                      <ul className="ops-list installed-list recent-activity-list">
+                        {installedPlugins.slice(0, 3).map((plugin) => (
+                          <li key={`recent-${plugin.id}`}>
                             <div className="installed-plugin-meta">
                               <strong>{plugin.name}</strong>
                               <small>({plugin.id})</small>
+                              <small>Last active: {formatLastActive(plugin.lastOpenedAt)}</small>
                             </div>
                             <div className="installed-actions">
                               <button
@@ -474,21 +465,6 @@ export default function App() {
                                 onClick={() => setActivePane(pluginPaneId(plugin.id))}
                               >
                                 Open
-                              </button>
-                              <button
-                                type="button"
-                                className="host-btn inline-update-btn"
-                                onClick={() => updateInstalledPlugin(plugin.id)}
-                                disabled={updatingPluginId === plugin.id}
-                              >
-                                {updatingPluginId === plugin.id ? 'Updating...' : 'Update'}
-                              </button>
-                              <button
-                                type="button"
-                                className="host-btn inline-delete-btn"
-                                onClick={() => removeInstalledPlugin(plugin.id)}
-                              >
-                                Delete
                               </button>
                             </div>
                           </li>
@@ -499,31 +475,57 @@ export default function App() {
                 </section>
               )}
 
-              {!isPluginPaneActive && activePane === 'library' && (
+              {!isPluginPaneActive && activePane === 'installed' && (
                 <section
                   className="card pane-card"
                   role="tabpanel"
-                  id="pane-library"
-                  aria-labelledby="tab-library"
+                  id="pane-installed"
+                  aria-labelledby="tab-installed"
                 >
-                  <h2>Plugin Library</h2>
-                  <p className="muted">
-                    Use this lane to curate plugin inventory, maintain trust metadata, and stage releases.
-                  </p>
-                  <div className="status-grid">
-                    <article className="status-tile">
-                      <p className="status-label">Approved</p>
-                      <p className="status-value">12</p>
-                    </article>
-                    <article className="status-tile">
-                      <p className="status-label">Needs Review</p>
-                      <p className="status-value">3</p>
-                    </article>
-                    <article className="status-tile">
-                      <p className="status-label">Deprecated</p>
-                      <p className="status-value">1</p>
-                    </article>
-                  </div>
+                  <h2>Installed Plugins</h2>
+                  <p className="muted">點擊卡片即可開啟對應插件。</p>
+
+                  {installedPlugins.length === 0 && (
+                    <p className="muted">目前還沒有已安裝插件，先到 Workspace 安裝一個吧。</p>
+                  )}
+
+                  {installedPlugins.length > 0 && (
+                    <ul className="ops-list installed-list">
+                      {installedPlugins.map((plugin) => (
+                        <li key={`installed-pane-${plugin.id}`}>
+                          <div className="installed-plugin-meta">
+                            <strong>{plugin.name}</strong>
+                            <small>({plugin.id})</small>
+                            <small>Last active: {formatLastActive(plugin.lastOpenedAt)}</small>
+                          </div>
+                          <div className="installed-actions">
+                            <button
+                              type="button"
+                              className="host-btn inline-open-btn"
+                              onClick={() => setActivePane(pluginPaneId(plugin.id))}
+                            >
+                              Open
+                            </button>
+                            <button
+                              type="button"
+                              className="host-btn inline-update-btn"
+                              onClick={() => updateInstalledPlugin(plugin.id)}
+                              disabled={updatingPluginId === plugin.id}
+                            >
+                              {updatingPluginId === plugin.id ? 'Updating...' : 'Update'}
+                            </button>
+                            <button
+                              type="button"
+                              className="host-btn inline-delete-btn"
+                              onClick={() => removeInstalledPlugin(plugin.id)}
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </section>
               )}
 
