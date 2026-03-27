@@ -144,3 +144,15 @@ C) Zod 驗證
    - 新增 2 筆任務 -> 重啟 Host -> 任務仍存在
    - hydrated 前不會 save 空資料
 5) 最後提供可直接貼入 Host 的插件 URL 範例格式
+
+
+
+在使用這份 Prompt 之前，請確保你的插件資料夾已經準備好 SDK：
+初始化插件專案：使用 npm create vite@latest 建立一個 React + TS 專案。
+加入 SDK 子模組：
+Bash
+git submodule add https://github.com/fatkin1012/Orbit-SDK sdk
+
+安裝必要插件：
+Bash
+npm install -D postcss-prefix-selector zod
