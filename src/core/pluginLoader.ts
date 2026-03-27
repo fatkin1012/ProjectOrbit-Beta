@@ -149,6 +149,14 @@ function withCacheBust(url: string, key = '__orbit_fetch_ts'): string {
   return resolved.toString();
 }
 
+function isRawGithubUrl(url: string): boolean {
+  try {
+    return new URL(url).hostname.toLowerCase() === 'raw.githubusercontent.com';
+  } catch {
+    return false;
+  }
+}
+
 function toCompanionCssCandidates(moduleUrl: string): string[] {
   const parsed = new URL(moduleUrl, window.location.href);
   const parts = parsed.pathname.split('/');
@@ -277,6 +285,10 @@ function detectBundleProfile(jsCode: string): BundleProfile {
   return 'unknown';
 }
 
+function hasRelativeModuleImports(jsCode: string): boolean {
+  return /from\s+['"]\.{1,2}\//.test(jsCode) || /import\(\s*['"]\.{1,2}\//.test(jsCode);
+}
+
 export async function installAndLoadPlugin(
   url: string,
   pluginId: string,
@@ -304,11 +316,7 @@ export async function installAndLoadPlugin(
     const fetchUrl = withCacheBust(normalizedUrl);
     const response = await fetch(fetchUrl, {
       signal,
-      cache: 'no-store',
-      headers: {
-        'cache-control': 'no-cache, no-store, must-revalidate',
-        pragma: 'no-cache'
-      }
+      cache: 'no-store'
     });
     debugLog('fetch completed', {
       fetchUrl,
@@ -341,78 +349,112 @@ export async function installAndLoadPlugin(
     await savePluginCode(cacheKey, jsCode);
     debugLog('plugin source cached to storage', { pluginId, cacheKey, chars: jsCode.length });
 
-    const importCandidates = getImportUrlCandidates(normalizedUrl, false);
-    debugLog('trying URL import candidates', { pluginId, importCandidates });
+    const containsInvalidLegacySelector = /#plugin-1\.0\.0/.test(jsCode);
+    const containsDavinciSelector = /#plugin-davinci/.test(jsCode);
+    const shouldTryBlobFirst = !hasRelativeModuleImports(jsCode);
 
-    let lastImportError: unknown = null;
-    for (const candidate of importCandidates) {
+    debugLog('import strategy decision', {
+      pluginId,
+      shouldTryBlobFirst,
+      containsInvalidLegacySelector,
+      containsDavinciSelector
+    });
+
+    let blobImportError: unknown = null;
+    let urlImportError: unknown = null;
+    let cdnImportError: unknown = null;
+
+    if (shouldTryBlobFirst) {
       try {
-        moduleExports = await importFromUrl(candidate);
-        importedFromUrl = candidate;
-        debugLog('URL import succeeded', {
+        moduleExports = await importFromCode(jsCode);
+        debugLog('blob import succeeded (fresh fetched source)', {
           pluginId,
-          importedFromUrl,
           exportKeys: Object.keys(moduleExports)
         });
-        break;
-      } catch (urlImportError) {
-        lastImportError = urlImportError;
-        rawImportError = urlImportError;
-        debugLog('URL import candidate failed', { pluginId, candidate, error: toErrorMessage(urlImportError) });
+      } catch (error) {
+        blobImportError = error;
+        debugLog('blob import failed (fresh fetched source)', {
+          pluginId,
+          error: toErrorMessage(error)
+        });
       }
     }
 
     if (!moduleExports) {
-      console.warn(
-        `[PluginLoader] URL import failed for "${pluginId}", trying fresh blob import before CDN fallback.`,
-        lastImportError
-      );
-      debugLog('attempting blob import fallback', {
-        pluginId,
-        containsCssHint:
-          /\.css['\"]|from\s+['\"][^'\"]+\.css['\"]|url\(/i.test(jsCode)
-      });
-      try {
-        moduleExports = await importFromCode(jsCode);
-        debugLog('blob import succeeded', { exportKeys: Object.keys(moduleExports) });
-      } catch (blobImportError) {
-        debugLog('blob import failed, trying CDN URL fallback', {
-          pluginId,
-          error: toErrorMessage(blobImportError)
-        });
+      const importCandidates = getImportUrlCandidates(normalizedUrl, false);
+      debugLog('trying URL import candidates', { pluginId, importCandidates });
 
-        const cdnCandidates = getImportUrlCandidates(normalizedUrl, true).filter(
-          (candidate) => candidate !== normalizedUrl
-        );
-
-        let cdnImportError: unknown = null;
-        for (const candidate of cdnCandidates) {
-          try {
-            moduleExports = await importFromUrl(candidate);
-            importedFromUrl = candidate;
-            debugLog('CDN URL import succeeded', {
-              pluginId,
-              importedFromUrl,
-              exportKeys: Object.keys(moduleExports)
-            });
-            break;
-          } catch (candidateError) {
-            cdnImportError = candidateError;
-            debugLog('CDN URL import failed', {
-              pluginId,
-              candidate,
-              error: toErrorMessage(candidateError)
-            });
-          }
-        }
-
-        if (!moduleExports) {
-          throw new Error(
-            `Plugin import failed across URL, blob, and CDN fallbacks. URL error: ${toErrorMessage(rawImportError)}; ` +
-              `blob error: ${toErrorMessage(blobImportError)}; CDN error: ${toErrorMessage(cdnImportError)}`
-          );
+      for (const candidate of importCandidates) {
+        try {
+          moduleExports = await importFromUrl(candidate);
+          importedFromUrl = candidate;
+          debugLog('URL import succeeded', {
+            pluginId,
+            importedFromUrl,
+            exportKeys: Object.keys(moduleExports)
+          });
+          break;
+        } catch (error) {
+          urlImportError = error;
+          rawImportError = error;
+          debugLog('URL import candidate failed', {
+            pluginId,
+            candidate,
+            error: toErrorMessage(error)
+          });
         }
       }
+    }
+
+    if (!moduleExports && !shouldTryBlobFirst) {
+      try {
+        moduleExports = await importFromCode(jsCode);
+        debugLog('blob import succeeded after URL failure', {
+          pluginId,
+          exportKeys: Object.keys(moduleExports)
+        });
+      } catch (error) {
+        blobImportError = error;
+        debugLog('blob import failed after URL failure', {
+          pluginId,
+          error: toErrorMessage(error)
+        });
+      }
+    }
+
+    if (!moduleExports) {
+      const cdnCandidates = getImportUrlCandidates(normalizedUrl, true).filter(
+        (candidate) => candidate !== normalizedUrl
+      );
+
+      for (const candidate of cdnCandidates) {
+        try {
+          moduleExports = await importFromUrl(candidate);
+          importedFromUrl = candidate;
+          debugLog('CDN URL import succeeded', {
+            pluginId,
+            importedFromUrl,
+            exportKeys: Object.keys(moduleExports)
+          });
+          break;
+        } catch (error) {
+          cdnImportError = error;
+          debugLog('CDN URL import failed', {
+            pluginId,
+            candidate,
+            error: toErrorMessage(error)
+          });
+        }
+      }
+    }
+
+    if (!moduleExports) {
+      throw new Error(
+        `Plugin import failed across blob, URL, and CDN fallbacks. ` +
+          `blob error: ${toErrorMessage(blobImportError)}; ` +
+          `URL error: ${toErrorMessage(urlImportError ?? rawImportError)}; ` +
+          `CDN error: ${toErrorMessage(cdnImportError)}`
+      );
     }
 
     if (importedFromUrl) {
@@ -430,7 +472,7 @@ export async function installAndLoadPlugin(
 
     // Some environments can fail `fetch` (CORS/proxy/offline policy) while URL import still works.
     // Try direct URL/CDN import before using local cache.
-    const directImportCandidates = getImportUrlCandidates(normalizedUrl, true);
+    const directImportCandidates = getImportUrlCandidates(normalizedUrl, !isRawGithubUrl(normalizedUrl));
     let directImportError: unknown = null;
 
     for (const candidate of directImportCandidates) {
