@@ -483,10 +483,6 @@ export default function App() {
                         <p className="status-value">{installedPlugins.length}</p>
                       </article>
                       <article className="status-tile">
-                        <p className="status-label">Mounted Slot</p>
-                        <p className="status-value">{isPluginPaneActive ? 'Live' : 'Idle'}</p>
-                      </article>
-                      <article className="status-tile">
                         <p className="status-label">Storage Events</p>
                         <p className="status-value">{auditRecords.length}</p>
                       </article>
@@ -645,10 +641,6 @@ export default function App() {
                     <li>
                       <span>IndexedDB Envelope Writes</span>
                       <strong>Healthy</strong>
-                    </li>
-                    <li>
-                      <span>Mounted Plugin Slot</span>
-                      <strong>{installedPlugins[0]?.id ?? 'Idle'}</strong>
                     </li>
                   </ul>
 
