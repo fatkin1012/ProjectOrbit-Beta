@@ -206,12 +206,127 @@ function toCompanionCssCandidates(moduleUrl: string): string[] {
 }
 
 // --- Plugin sandboxing helpers -------------------------------------------------
-// Map host mount elements to their shadow roots so we can redirect plugin DOM
-// and style insertions into an isolated shadow root to avoid leaking global
-// CSS (many third-party plugins inject global `body`, `*` or heading styles).
-const __orbitSandboxRegistry = new Map<HTMLElement, ShadowRoot>();
+// Map host mount elements to their shadow roots and owning plugin id so we
+// can redirect plugin DOM and style insertions into an isolated shadow root
+// to avoid leaking global CSS (many third-party plugins inject global
+// `body`, `*` or heading styles).
+const __orbitSandboxRegistry = new Map<HTMLElement, { shadow: ShadowRoot; pluginId: string }>();
 let __orbitSandboxPatchCount = 0;
 let __orbitOrigAppendChild: typeof Node.prototype.appendChild = Node.prototype.appendChild;
+// Head observer for dynamically added <style> / <link rel="stylesheet"> nodes.
+let __orbitHeadObserver: MutationObserver | null = null;
+let __orbitHeadObserverRefCount = 0;
+// Cache plugin stylesheet fragments and extracted variables so they can be
+// reapplied when a plugin mount is recreated after unmount.
+const __orbitPluginStyleCache = new Map<string, { cssFragments: string[]; vars: Record<string, string> }>();
+
+function __orbitExtractCssVars(styleText: string): Record<string, string> {
+  const varBlocksRegex = /(?:^|})\s*(?:body|:root)\s*\{([\s\S]*?)\}/gi;
+  const declRegex = /(--[a-zA-Z0-9-_]+)\s*:\s*([^;]+)\s*;/g;
+  let match: RegExpExecArray | null = null;
+  const vars: Record<string, string> = {};
+
+  while ((match = varBlocksRegex.exec(styleText)) !== null) {
+    const block = match[1];
+    let declMatch: RegExpExecArray | null = null;
+    while ((declMatch = declRegex.exec(block)) !== null) {
+      vars[declMatch[1]] = declMatch[2].trim();
+    }
+  }
+
+  return vars;
+}
+
+function __orbitApplyVarsToWrappers(vars: Record<string, string>): void {
+  if (!vars || Object.keys(vars).length === 0) return;
+  const wrappers = document.querySelectorAll('.orbit-plugin-sandbox');
+  wrappers.forEach((w) => {
+    try {
+      const el = w as HTMLElement;
+      for (const [k, v] of Object.entries(vars)) {
+        el.style.setProperty(k, v);
+      }
+    } catch {
+      // ignore
+    }
+  });
+}
+
+async function __orbitProcessLinkHref(href: string, pluginId?: string): Promise<void> {
+  try {
+    const resp = await fetch(href, { cache: 'no-store' });
+    if (!resp.ok) return;
+    const text = await resp.text();
+    const vars = __orbitExtractCssVars(text);
+    __orbitApplyVarsToWrappers(vars);
+
+    if (pluginId) {
+      const cached = __orbitPluginStyleCache.get(pluginId) ?? { cssFragments: [], vars: {} };
+      // store entire linked stylesheet as a fragment
+      cached.cssFragments.push(text);
+      for (const [k, v] of Object.entries(vars)) {
+        cached.vars[k] = v;
+      }
+      __orbitPluginStyleCache.set(pluginId, cached);
+    }
+  } catch {
+    // network/CORS may block — ignore
+  }
+}
+
+function __orbitStartHeadObserver(): void {
+  __orbitHeadObserverRefCount += 1;
+  if (__orbitHeadObserver) return;
+
+  __orbitHeadObserver = new MutationObserver((mutations) => {
+    for (const m of mutations) {
+      if (m.type === 'childList') {
+        m.addedNodes.forEach((n) => {
+          if (!(n instanceof Element)) return;
+          const el = n as Element;
+          if (el.tagName === 'STYLE') {
+            const text = (el as HTMLStyleElement).textContent ?? '';
+            const vars = __orbitExtractCssVars(text);
+            __orbitApplyVarsToWrappers(vars);
+          } else if (el.tagName === 'LINK' && (el as HTMLLinkElement).rel === 'stylesheet') {
+            const linkEl = el as HTMLLinkElement;
+            const href = linkEl.href;
+            const pluginId = (linkEl.dataset as DOMStringMap)?.orbitPluginStyle;
+            if (href) void __orbitProcessLinkHref(href, pluginId);
+          }
+        });
+      } else if (m.type === 'attributes' && m.target instanceof Element) {
+        const t = m.target as Element;
+        if (t.tagName === 'STYLE') {
+          const text = (t as HTMLStyleElement).textContent ?? '';
+          const vars = __orbitExtractCssVars(text);
+          __orbitApplyVarsToWrappers(vars);
+        } else if (t.tagName === 'LINK' && (t as HTMLLinkElement).rel === 'stylesheet') {
+          const linkEl = t as HTMLLinkElement;
+          const href = linkEl.href;
+          const pluginId = (linkEl.dataset as DOMStringMap)?.orbitPluginStyle;
+          if (href) void __orbitProcessLinkHref(href, pluginId);
+        }
+      }
+    }
+  });
+
+  __orbitHeadObserver.observe(document.head, { childList: true, subtree: false, attributes: true, attributeFilter: ['href', 'rel'] });
+}
+
+function __orbitStopHeadObserver(): void {
+  __orbitHeadObserverRefCount = Math.max(0, __orbitHeadObserverRefCount - 1);
+  if (__orbitHeadObserverRefCount > 0) return;
+  if (!__orbitHeadObserver) return;
+  try {
+    __orbitHeadObserver.disconnect();
+  } catch {
+    // ignore
+  }
+  __orbitHeadObserver = null;
+}
+let __orbitOrigInsertBefore: typeof Node.prototype.insertBefore = Node.prototype.insertBefore;
+let __orbitOrigAppend: any = (Node.prototype as any).append;
 
 function __orbitApplyAppendPatch(): void {
   if (__orbitSandboxPatchCount > 0) {
@@ -221,27 +336,118 @@ function __orbitApplyAppendPatch(): void {
 
   __orbitOrigAppendChild = Node.prototype.appendChild;
 
-  Node.prototype.appendChild = function <T extends Node>(this: Node, node: T): T {
-    try {
-      // If code is appending into a host mount element that we manage,
-      // redirect the append into that host's shadow root instead.
-      if (this instanceof HTMLElement) {
-        const el = this as HTMLElement;
-        const shadow = __orbitSandboxRegistry.get(el);
-        if (shadow) {
-          return shadow.appendChild(node) as unknown as T;
+  // Helper to handle <style> nodes appended to document.head
+  function __orbitProcessHeadStyle<T extends Node>(node: HTMLStyleElement): T {
+    const styleText = node.textContent ?? '';
+    const hosts = Array.from(__orbitSandboxRegistry.keys());
+
+    if (hosts.length === 0) {
+      return node as unknown as T;
+    }
+
+    const lastHost = hosts[hosts.length - 1];
+    const entry = __orbitSandboxRegistry.get(lastHost);
+    if (!entry) return node as unknown as T;
+    const wrapper = lastHost.querySelector('.orbit-plugin-sandbox') as HTMLElement | null;
+    const shadow = entry.shadow;
+    const pluginId = (wrapper?.dataset.orbitPluginId as string) ?? entry.pluginId;
+
+    const varBlocksRegex = /(?:^|})\s*(?:body|:root)\s*\{([\s\S]*?)\}/gi;
+    const declRegex = /(--[a-zA-Z0-9-_]+)\s*:\s*([^;]+)\s*;/g;
+    let match: RegExpExecArray | null = null;
+    const vars: Record<string, string> = {};
+
+    while ((match = varBlocksRegex.exec(styleText)) !== null) {
+      const block = match[1];
+      let declMatch: RegExpExecArray | null = null;
+      while ((declMatch = declRegex.exec(block)) !== null) {
+        vars[declMatch[1]] = declMatch[2].trim();
+      }
+    }
+
+    // Cache the original or remainder CSS for this plugin so we can reapply
+    // it when the plugin is remounted.
+    if (pluginId) {
+      const cached = __orbitPluginStyleCache.get(pluginId) ?? { cssFragments: [], vars: {} };
+      // merge vars
+      for (const [k, v] of Object.entries(vars)) {
+        cached.vars[k] = v;
+      }
+      __orbitPluginStyleCache.set(pluginId, cached);
+    }
+
+    if (Object.keys(vars).length > 0 && wrapper) {
+      for (const [k, v] of Object.entries(vars)) {
+        try {
+          wrapper.style.setProperty(k, v);
+        } catch {
+          // ignore invalid values
         }
       }
 
-      // If code is appending a <style> into document.head, route it into the
-      // most recently registered plugin shadow root so the CSS is scoped.
-      if (this === document.head && node instanceof HTMLStyleElement) {
-        const hosts = Array.from(__orbitSandboxRegistry.keys());
-        if (hosts.length > 0) {
-          const lastHost = hosts[hosts.length - 1];
-          const shadow = __orbitSandboxRegistry.get(lastHost)!;
-          return shadow.appendChild(node) as unknown as T;
+      const remainder = styleText.replace(varBlocksRegex, '');
+      if (remainder.trim().length > 0) {
+        const remainderStyle = document.createElement('style');
+        remainderStyle.textContent = remainder;
+        shadow.appendChild(remainderStyle as unknown as Node);
+
+        // cache remainder
+        if (pluginId) {
+          const cached = __orbitPluginStyleCache.get(pluginId) ?? { cssFragments: [], vars: {} };
+          cached.cssFragments.push(remainder);
+          __orbitPluginStyleCache.set(pluginId, cached);
         }
+
+        try {
+          const placeholder = document.createElement('style');
+          if (node.id) placeholder.id = node.id;
+          if (pluginId) placeholder.dataset.orbitPluginStyle = pluginId;
+          placeholder.textContent = `/* plugin styles moved to shadow DOM; vars applied to wrapper */`;
+          __orbitOrigAppendChild.call(document.head, placeholder as any);
+          return placeholder as unknown as T;
+        } catch {
+          return __orbitOrigAppendChild.call(document.head, node as any) as T;
+        }
+      } else {
+        try {
+          const placeholder = document.createElement('style');
+          if (node.id) placeholder.id = node.id;
+          if (pluginId) placeholder.dataset.orbitPluginStyle = pluginId;
+          placeholder.textContent = `/* plugin vars moved to wrapper; no remainder css */`;
+          __orbitOrigAppendChild.call(document.head, placeholder as any);
+          if (pluginId) {
+            const cached = __orbitPluginStyleCache.get(pluginId) ?? { cssFragments: [], vars: {} };
+            __orbitPluginStyleCache.set(pluginId, cached);
+          }
+          return placeholder as unknown as T;
+        } catch {
+          return __orbitOrigAppendChild.call(document.head, node as any) as T;
+        }
+      }
+    }
+
+    // No CSS vars found; append whole style into shadow as normal and cache it.
+    if (pluginId) {
+      const cached = __orbitPluginStyleCache.get(pluginId) ?? { cssFragments: [], vars: {} };
+      cached.cssFragments.push(styleText);
+      __orbitPluginStyleCache.set(pluginId, cached);
+    }
+
+    return shadow.appendChild(node) as unknown as T;
+  }
+
+  Node.prototype.appendChild = function <T extends Node>(this: Node, node: T): T {
+    try {
+      if (this instanceof HTMLElement) {
+        const el = this as HTMLElement;
+        const entry = __orbitSandboxRegistry.get(el);
+        if (entry) {
+          return entry.shadow.appendChild(node) as unknown as T;
+        }
+      }
+
+      if (this === document.head && node instanceof HTMLStyleElement) {
+        return __orbitProcessHeadStyle(node as HTMLStyleElement);
       }
     } catch {
       // Fall through to default behavior on any error
@@ -250,7 +456,58 @@ function __orbitApplyAppendPatch(): void {
     return __orbitOrigAppendChild.call(this, node as any) as T;
   };
 
+  // Also patch insertBefore and append to catch alternate insertion paths
+  __orbitOrigInsertBefore = Node.prototype.insertBefore;
+  Node.prototype.insertBefore = function <T extends Node>(this: Node, node: T, referenceNode: Node | null): T {
+    try {
+      if (this instanceof HTMLElement) {
+        const el = this as HTMLElement;
+        const entry = __orbitSandboxRegistry.get(el);
+        if (entry) {
+          return entry.shadow.appendChild(node) as unknown as T;
+        }
+      }
+
+      if (this === document.head && node instanceof HTMLStyleElement) {
+        return __orbitProcessHeadStyle(node as HTMLStyleElement);
+      }
+    } catch {
+      // fall through
+    }
+
+    return __orbitOrigInsertBefore.call(this, node as any, referenceNode) as T;
+  };
+
+  __orbitOrigAppend = (Node.prototype as any).append;
+  (Node.prototype as any).append = function (...nodes: any[]): void {
+    try {
+      for (const nd of nodes) {
+        if (nd instanceof HTMLStyleElement && this === document.head) {
+          __orbitProcessHeadStyle(nd);
+          continue;
+        }
+
+        if (this instanceof HTMLElement) {
+          const entry = __orbitSandboxRegistry.get(this as HTMLElement);
+          if (entry) {
+            entry.shadow.appendChild(nd instanceof Node ? nd : document.createTextNode(String(nd)));
+            continue;
+          }
+        }
+
+        __orbitOrigAppend.call(this, nd);
+      }
+      return;
+    } catch {
+      // fallback
+    }
+
+    return __orbitOrigAppend.call(this, ...nodes);
+  };
+
   __orbitSandboxPatchCount = 1;
+  // Start observing head changes so dynamic stylesheet additions are processed
+  __orbitStartHeadObserver();
 }
 
 function __orbitRemoveAppendPatch(): void {
@@ -258,6 +515,20 @@ function __orbitRemoveAppendPatch(): void {
   if (__orbitSandboxPatchCount === 0) {
     try {
       Node.prototype.appendChild = __orbitOrigAppendChild;
+      // restore other patched functions
+      try {
+        Node.prototype.insertBefore = __orbitOrigInsertBefore;
+      } catch {
+        /* ignore */
+      }
+
+      try {
+        (Node.prototype as any).append = __orbitOrigAppend;
+      } catch {
+        /* ignore */
+      }
+      // Stop head observer when no longer needed
+      __orbitStopHeadObserver();
     } catch {
       // ignore
     }
@@ -709,15 +980,44 @@ export async function installAndLoadPlugin(
       // element so the plugin's internal mapping (which expects the original
       // host element) continues to work.
       const wrapper = document.createElement('div');
-      wrapper.className = `orbit-plugin-sandbox ${plugin.id}`;
+      wrapper.className = 'orbit-plugin-sandbox';
+      wrapper.dataset.orbitPluginId = plugin.id;
       host.appendChild(wrapper);
 
       const shadow = wrapper.attachShadow({ mode: 'open' });
 
       // Register the host -> shadow mapping and enable the global appendChild
       // patch so subsequent DOM/style appends are redirected into the shadow.
-      __orbitSandboxRegistry.set(host, shadow);
+      __orbitSandboxRegistry.set(host, { shadow, pluginId: plugin.id });
       __orbitApplyAppendPatch();
+
+      // If we have cached plugin styles/vars from a previous mount, reapply
+      // them into the new shadow root and onto the wrapper so the UI retains
+      // its colors on remount.
+      try {
+        const cached = __orbitPluginStyleCache.get(plugin.id);
+        if (cached) {
+          try {
+            for (const [k, v] of Object.entries(cached.vars)) {
+              wrapper.style.setProperty(k, v);
+            }
+          } catch {
+            // ignore
+          }
+
+          for (const fragment of cached.cssFragments) {
+            try {
+              const s = document.createElement('style');
+              s.textContent = fragment;
+              shadow.appendChild(s as unknown as Node);
+            } catch {
+              // ignore per-fragment failures
+            }
+          }
+        }
+      } catch (err) {
+        // ignore cache reapply errors
+      }
 
       try {
         return plugin.mount(host, context as any);
@@ -734,22 +1034,22 @@ export async function installAndLoadPlugin(
         await Promise.resolve(res);
       } finally {
         // Remove the wrapper (which contains the shadow root and any styles)
-        try {
-          const wrapper = host.querySelector(`.orbit-plugin-sandbox.${plugin.id}`) as HTMLElement | null;
-          if (wrapper && wrapper.parentNode) {
-            wrapper.parentNode.removeChild(wrapper);
-          } else {
-            const fallback = host.querySelector('.orbit-plugin-sandbox') as HTMLElement | null;
-            if (fallback && fallback.parentNode) {
-              fallback.parentNode.removeChild(fallback);
+          try {
+            const wrapper = host.querySelector(`.orbit-plugin-sandbox[data-orbit-plugin-id="${plugin.id}"]`) as HTMLElement | null;
+            if (wrapper && wrapper.parentNode) {
+              wrapper.parentNode.removeChild(wrapper);
+            } else {
+              const fallback = host.querySelector('.orbit-plugin-sandbox') as HTMLElement | null;
+              if (fallback && fallback.parentNode) {
+                fallback.parentNode.removeChild(fallback);
+              }
             }
+          } catch {
+            // ignore
           }
-        } catch {
-          // ignore
-        }
 
-        __orbitSandboxRegistry.delete(host);
-        __orbitRemoveAppendPatch();
+          __orbitSandboxRegistry.delete(host);
+          __orbitRemoveAppendPatch();
       }
     }
   };
