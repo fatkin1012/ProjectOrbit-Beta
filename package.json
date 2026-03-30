@@ -32,7 +32,7 @@
   "build": {
     "appId": "com.projectorbit.hub",
     "productName": "ProjectOrbit Hub",
-    "icon": "electron/assets/icon.png",
+    "icon": "electron/assets/ProjectOrbit_Icon.png",
     "directories": {
       "output": "release"
     },
@@ -42,17 +42,17 @@
       "package.json"
     ],
     "win": {
-      "icon": "electron/assets/icon.ico",
+      "icon": "electron/assets/ProjectOrbit_Icon.ico",
       "signAndEditExecutable": false,
       "target": [
         "nsis"
       ]
     },
     "mac": {
-      "icon": "electron/assets/icon.icns"
+      "icon": "electron/assets/ProjectOrbit_Icon.icns"
     },
     "linux": {
-      "icon": "electron/assets/icon.png"
+      "icon": "electron/assets/ProjectOrbit_Icon.png"
     },
     "nsis": {
       "oneClick": false,

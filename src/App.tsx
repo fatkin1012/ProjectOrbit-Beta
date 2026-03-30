@@ -264,6 +264,11 @@ export default function App() {
     setAuditRecords(getStorageAuditRecords(activeId));
   }, [activeInstalledPlugin?.id, installedPlugins]);
 
+  // Debug helper: initialize input blocker detector when ?orbitDebug=1 is present in the URL
+  useEffect(() => {
+    // debug loader removed
+  }, []);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') {

@@ -36,6 +36,11 @@ async function writeInstalledPluginsFile(payload) {
 function createWindow() {
   // Resolve an icon from electron/assets if present (ico/icns/png)
   const iconCandidates = [
+    // Preferred project-specific icon filenames
+    path.join(__dirname, 'assets', 'ProjectOrbit_Icon.ico'),
+    path.join(__dirname, 'assets', 'ProjectOrbit_Icon.icns'),
+    path.join(__dirname, 'assets', 'ProjectOrbit_Icon.png'),
+    // Fallback legacy names
     path.join(__dirname, 'assets', 'icon.ico'),
     path.join(__dirname, 'assets', 'icon.icns'),
     path.join(__dirname, 'assets', 'icon.png')
@@ -91,6 +96,7 @@ app.whenReady().then(() => {
     await writeInstalledPluginsFile(payload);
     return true;
   });
+
 
   createWindow();
 

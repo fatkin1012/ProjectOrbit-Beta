@@ -1020,12 +1020,45 @@ export async function installAndLoadPlugin(
       }
 
       try {
-        return plugin.mount(host, context as any);
-      } catch (err) {
-        // On mount error, ensure we clean up the registry and patch state.
-        __orbitSandboxRegistry.delete(host);
-        __orbitRemoveAppendPatch();
-        throw err;
+        // Prevent the freshly appended wrapper from intercepting pointer events
+        // while the plugin's mount code runs synchronously. This avoids a
+        // transient state where a large, empty wrapper covers host inputs.
+        const prevPointer = wrapper.style.pointerEvents;
+        try {
+          wrapper.style.pointerEvents = 'none';
+        } catch {
+          // ignore style set errors
+        }
+
+        let mountResult: unknown;
+        try {
+          mountResult = plugin.mount(host, context as any);
+        } catch (err) {
+          // On mount error, ensure we clean up the registry and patch state.
+          __orbitSandboxRegistry.delete(host);
+          __orbitRemoveAppendPatch();
+          // restore pointer-events before rethrowing (wrapper will likely be removed by caller)
+          try {
+            wrapper.style.pointerEvents = prevPointer;
+          } catch {
+            /* ignore */
+          }
+          throw err;
+        }
+
+        // Restore pointer-events immediately after mount returns (synchronous return
+        // or a Promise object). We don't wait for any mount Promise to resolve because
+        // UI often becomes interactive as soon as DOM is appended.
+        try {
+          wrapper.style.pointerEvents = prevPointer || '';
+        } catch {
+          // ignore
+        }
+
+        return mountResult as any;
+      } catch (error) {
+        // propagate
+        throw error;
       }
     },
     async unmount(host: HTMLElement) {
