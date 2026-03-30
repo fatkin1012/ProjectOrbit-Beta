@@ -14,6 +14,21 @@ interface PluginContainerProps {
 const MOUNT_WARN_TIMEOUT_MS = 6000;
 const CONTAINER_LOG_PREFIX = '[PluginContainer:debug]';
 
+function removePluginStylesheets(pluginId: string): number {
+  const links = document.querySelectorAll('link[rel="stylesheet"][data-orbit-plugin-style]');
+  let removed = 0;
+
+  links.forEach((link) => {
+    const element = link as HTMLLinkElement;
+    if (element.dataset.orbitPluginStyle === pluginId) {
+      element.remove();
+      removed += 1;
+    }
+  });
+
+  return removed;
+}
+
 function getStylesheetCount(): number {
   try {
     return document.styleSheets.length;
@@ -68,11 +83,14 @@ export function PluginContainer({
     setStatus('loading');
     setErrorMessage('');
 
+    const removedStylesBeforeMount = removePluginStylesheets(pluginId);
+
     console.info(`${CONTAINER_LOG_PREFIX} load cycle start`, {
       pluginId,
       sourceUrl,
       mode,
-      stylesheetCount: getStylesheetCount()
+      stylesheetCount: getStylesheetCount(),
+      removedStylesBeforeMount
     });
 
     void (async () => {
@@ -195,6 +213,14 @@ export function PluginContainer({
       void Promise.resolve(plugin.unmount(mountPoint)).catch((error) => {
         console.error(`[PluginContainer] unmount failed for ${pluginId}`, error);
       });
+
+      const removedStylesOnUnmount = removePluginStylesheets(pluginId);
+      if (removedStylesOnUnmount > 0) {
+        console.info(`${CONTAINER_LOG_PREFIX} removed plugin styles on unmount`, {
+          pluginId,
+          removedStylesOnUnmount
+        });
+      }
     };
   }, [pluginId, sourceUrl]);
 

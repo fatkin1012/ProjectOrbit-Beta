@@ -26,8 +26,15 @@ const DEFAULT_PLUGIN_URL =
 type StaticHubPane = 'workspace' | 'installed' | 'operations';
 type PluginHubPane = `plugin:${string}`;
 type HubPane = StaticHubPane | PluginHubPane;
+type UrlConversionMode = 'none' | 'raw' | 'jsdelivr';
 
 const INSTALLED_PLUGINS_STORAGE_KEY = 'orbit-hub.installed-plugins';
+
+const URL_CONVERSION_OPTIONS: Array<{ value: UrlConversionMode; label: string }> = [
+  { value: 'none', label: 'Keep input URL as-is' },
+  { value: 'raw', label: 'Convert to raw.githubusercontent' },
+  { value: 'jsdelivr', label: 'Convert to jsDelivr (cdn.jsdelivr.net)' }
+];
 
 function pluginPaneId(id: string): PluginHubPane {
   return `plugin:${id}`;
@@ -139,9 +146,50 @@ function formatLastActive(timestamp: number): string {
   }).format(new Date(timestamp));
 }
 
+function toRawGithubFromJsDelivr(url: string): string | null {
+  const jsDelivrMatch = url.match(/^https:\/\/cdn\.jsdelivr\.net\/gh\/([^/]+)\/([^@/]+)@([^/]+)\/(.+)$/i);
+  if (!jsDelivrMatch) {
+    return null;
+  }
+
+  const [, owner, repo, ref, filePath] = jsDelivrMatch;
+  return `https://raw.githubusercontent.com/${owner}/${repo}/${ref}/${filePath}`;
+}
+
+function toJsDelivrFromRawGithub(url: string): string | null {
+  const rawMatch = url.match(/^https:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/([^/]+)\/(.+)$/i);
+  if (!rawMatch) {
+    return null;
+  }
+
+  const [, owner, repo, ref, filePath] = rawMatch;
+  return `https://cdn.jsdelivr.net/gh/${owner}/${repo}@${ref}/${filePath}`;
+}
+
+function convertPluginUrlByMode(inputUrl: string, mode: UrlConversionMode): string {
+  const trimmed = inputUrl.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+
+  const githubNormalized = normalizePluginSourceUrl(trimmed);
+
+  if (mode === 'none') {
+    return githubNormalized;
+  }
+
+  if (mode === 'raw') {
+    return toRawGithubFromJsDelivr(githubNormalized) ?? githubNormalized;
+  }
+
+  const rawCandidate = toRawGithubFromJsDelivr(githubNormalized) ?? githubNormalized;
+  return toJsDelivrFromRawGithub(rawCandidate) ?? rawCandidate;
+}
+
 export default function App() {
   const [activePane, setActivePane] = useState<HubPane>('workspace');
   const [sourceUrl, setSourceUrl] = useState(DEFAULT_PLUGIN_URL);
+  const [urlConversionMode, setUrlConversionMode] = useState<UrlConversionMode>('none');
   const [installedPlugins, setInstalledPlugins] = useState<InstalledPlugin[]>([]);
   const [isInstalledPluginsHydrated, setIsInstalledPluginsHydrated] = useState(false);
   const [validationError, setValidationError] = useState('');
@@ -162,6 +210,10 @@ export default function App() {
   }, [activePane, installedPlugins]);
 
   const isPluginPaneActive = activeInstalledPlugin !== null;
+  const convertedSourceUrlPreview = useMemo(
+    () => convertPluginUrlByMode(sourceUrl, urlConversionMode),
+    [sourceUrl, urlConversionMode]
+  );
 
   useEffect(() => {
     if (isPluginPaneActive) {
@@ -337,7 +389,8 @@ export default function App() {
   async function onInstall(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    const normalizedUrl = normalizePluginSourceUrl(sourceUrl);
+    const convertedUrl = convertPluginUrlByMode(sourceUrl, urlConversionMode);
+    const normalizedUrl = normalizePluginSourceUrl(convertedUrl);
 
     if (!/^https?:\/\//i.test(normalizedUrl)) {
       setValidationError('Source URL must start with http:// or https://');
@@ -453,6 +506,30 @@ export default function App() {
                         placeholder="https://.../plugin.js"
                         autoComplete="off"
                       />
+
+                      <div className="plugin-url-tools">
+                        <label htmlFor="plugin-url-conversion">URL conversion</label>
+                        <select
+                          id="plugin-url-conversion"
+                          name="plugin-url-conversion"
+                          value={urlConversionMode}
+                          onChange={(event) =>
+                            setUrlConversionMode(event.target.value as UrlConversionMode)
+                          }
+                        >
+                          {URL_CONVERSION_OPTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {sourceUrl.trim() && (
+                        <p className="muted plugin-url-preview" aria-live="polite">
+                          Effective install URL: {convertedSourceUrlPreview}
+                        </p>
+                      )}
 
                       {validationError && (
                         <p className="inline-error" role="alert">

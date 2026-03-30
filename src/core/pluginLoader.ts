@@ -135,12 +135,42 @@ function toJsDelivrUrl(url: string): string | null {
   return `https://cdn.jsdelivr.net/gh/${owner}/${repo}@${ref}/${filePath}`;
 }
 
+function toRawGithubUrlFromJsDelivr(url: string): string | null {
+  const jsDelivrMatch = url.match(/^https:\/\/cdn\.jsdelivr\.net\/gh\/([^/]+)\/([^@/]+)@([^/]+)\/(.+)$/i);
+  if (!jsDelivrMatch) {
+    return null;
+  }
+
+  const [, owner, repo, ref, filePath] = jsDelivrMatch;
+  return `https://raw.githubusercontent.com/${owner}/${repo}/${ref}/${filePath}`;
+}
+
 function getImportUrlCandidates(url: string, includeCdnFallback = true): string[] {
-  const candidates = (includeCdnFallback
-    ? [url, toJsDelivrUrl(url)]
-    : [url])
-    .filter((value): value is string => Boolean(value));
-  return Array.from(new Set(candidates));
+  const candidates = includeCdnFallback
+    ? [url, toRawGithubUrlFromJsDelivr(url), toJsDelivrUrl(url)]
+    : [url, toRawGithubUrlFromJsDelivr(url)];
+
+  const normalized = candidates.filter((value): value is string => Boolean(value));
+  return Array.from(new Set(normalized));
+}
+
+function getPreferredFetchCandidates(url: string): string[] {
+  const rawMirror = toRawGithubUrlFromJsDelivr(url);
+  if (rawMirror) {
+    // Prefer raw GitHub when source is jsDelivr to avoid stale edge caches.
+    return Array.from(new Set([rawMirror, url]));
+  }
+
+  return getImportUrlCandidates(url, true);
+}
+
+function summarizeSourceForDebug(source: string): string {
+  let hash = 0;
+  for (let i = 0; i < source.length; i += 1) {
+    hash = (hash * 31 + source.charCodeAt(i)) >>> 0;
+  }
+
+  return `${source.length}:${hash.toString(16)}`;
 }
 
 function withCacheBust(url: string, key = '__orbit_fetch_ts'): string {
@@ -232,6 +262,10 @@ function toErrorMessage(error: unknown): string {
   return 'Unknown error';
 }
 
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'AbortError';
+}
+
 function buildPluginCacheKey(pluginId: string, normalizedUrl: string): string {
   return `${pluginId}::${normalizedUrl}`;
 }
@@ -313,28 +347,70 @@ export async function installAndLoadPlugin(
   debugLog('installAndLoadPlugin start', { pluginId, url, normalizedUrl });
 
   try {
-    const fetchUrl = withCacheBust(normalizedUrl);
-    const response = await fetch(fetchUrl, {
-      signal,
-      cache: 'no-store'
-    });
-    debugLog('fetch completed', {
-      fetchUrl,
-      ok: response.ok,
-      status: response.status,
-      statusText: response.statusText,
-      contentType: response.headers.get('content-type'),
-      contentLength: response.headers.get('content-length')
-    });
+    const fetchCandidates = getPreferredFetchCandidates(normalizedUrl);
+    let response: Response | null = null;
+    let fetchedFromUrl: string | null = null;
+    let lastFetchError: unknown = null;
 
-    if (!response.ok) {
-      throw new Error(`Failed to fetch plugin: ${response.status} ${response.statusText}`);
+    debugLog('trying fetch candidates', { pluginId, fetchCandidates });
+
+    for (const candidate of fetchCandidates) {
+      const fetchUrl = withCacheBust(candidate);
+
+      try {
+        const candidateResponse = await fetch(fetchUrl, {
+          signal,
+          cache: 'no-store'
+        });
+
+        debugLog('fetch candidate completed', {
+          pluginId,
+          fetchUrl,
+          ok: candidateResponse.ok,
+          status: candidateResponse.status,
+          statusText: candidateResponse.statusText,
+          contentType: candidateResponse.headers.get('content-type'),
+          contentLength: candidateResponse.headers.get('content-length'),
+          etag: candidateResponse.headers.get('etag'),
+          lastModified: candidateResponse.headers.get('last-modified')
+        });
+
+        if (!candidateResponse.ok) {
+          lastFetchError = new Error(
+            `Failed to fetch plugin from ${candidate}: ${candidateResponse.status} ${candidateResponse.statusText}`
+          );
+          continue;
+        }
+
+        response = candidateResponse;
+        fetchedFromUrl = candidate;
+        break;
+      } catch (candidateError) {
+        if (signal?.aborted || isAbortError(candidateError)) {
+          throw new DOMException('Plugin fetch aborted.', 'AbortError');
+        }
+
+        lastFetchError = candidateError;
+        debugLog('fetch candidate failed', {
+          pluginId,
+          candidate,
+          error: toErrorMessage(candidateError)
+        });
+      }
+    }
+
+    if (!response) {
+      throw new Error(
+        `Failed to fetch plugin from all candidates. Last error: ${toErrorMessage(lastFetchError)}`
+      );
     }
 
     jsCode = await response.text();
     const bundleProfile = detectBundleProfile(jsCode);
     debugLog('plugin source downloaded', {
+      fetchedFromUrl,
       chars: jsCode.length,
+      sourceSignature: summarizeSourceForDebug(jsCode),
       preview: jsCode.slice(0, 180),
       bundleProfile
     });
@@ -461,7 +537,7 @@ export async function installAndLoadPlugin(
       await ensurePluginStyles(pluginId, importedFromUrl);
     }
   } catch (fetchError) {
-    if (fetchError instanceof DOMException && fetchError.name === 'AbortError') {
+    if (isAbortError(fetchError)) {
       throw fetchError;
     }
 
@@ -472,7 +548,16 @@ export async function installAndLoadPlugin(
 
     // Some environments can fail `fetch` (CORS/proxy/offline policy) while URL import still works.
     // Try direct URL/CDN import before using local cache.
-    const directImportCandidates = getImportUrlCandidates(normalizedUrl, !isRawGithubUrl(normalizedUrl));
+    const directImportCandidates = isRawGithubUrl(normalizedUrl)
+      ? []
+      : getImportUrlCandidates(normalizedUrl, true);
+
+    if (directImportCandidates.length === 0) {
+      debugLog('skipping direct URL import fallback', {
+        pluginId,
+        reason: 'raw.githubusercontent URL dynamic import can fail due MIME=text/plain'
+      });
+    }
     let directImportError: unknown = null;
 
     for (const candidate of directImportCandidates) {
