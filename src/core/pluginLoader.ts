@@ -205,6 +205,67 @@ function toCompanionCssCandidates(moduleUrl: string): string[] {
   return cssNames.map((name) => new URL(name, baseHref).toString());
 }
 
+// --- Plugin sandboxing helpers -------------------------------------------------
+// Map host mount elements to their shadow roots so we can redirect plugin DOM
+// and style insertions into an isolated shadow root to avoid leaking global
+// CSS (many third-party plugins inject global `body`, `*` or heading styles).
+const __orbitSandboxRegistry = new Map<HTMLElement, ShadowRoot>();
+let __orbitSandboxPatchCount = 0;
+let __orbitOrigAppendChild: typeof Node.prototype.appendChild = Node.prototype.appendChild;
+
+function __orbitApplyAppendPatch(): void {
+  if (__orbitSandboxPatchCount > 0) {
+    __orbitSandboxPatchCount += 1;
+    return;
+  }
+
+  __orbitOrigAppendChild = Node.prototype.appendChild;
+
+  Node.prototype.appendChild = function <T extends Node>(this: Node, node: T): T {
+    try {
+      // If code is appending into a host mount element that we manage,
+      // redirect the append into that host's shadow root instead.
+      if (this instanceof HTMLElement) {
+        const el = this as HTMLElement;
+        const shadow = __orbitSandboxRegistry.get(el);
+        if (shadow) {
+          return shadow.appendChild(node) as unknown as T;
+        }
+      }
+
+      // If code is appending a <style> into document.head, route it into the
+      // most recently registered plugin shadow root so the CSS is scoped.
+      if (this === document.head && node instanceof HTMLStyleElement) {
+        const hosts = Array.from(__orbitSandboxRegistry.keys());
+        if (hosts.length > 0) {
+          const lastHost = hosts[hosts.length - 1];
+          const shadow = __orbitSandboxRegistry.get(lastHost)!;
+          return shadow.appendChild(node) as unknown as T;
+        }
+      }
+    } catch {
+      // Fall through to default behavior on any error
+    }
+
+    return __orbitOrigAppendChild.call(this, node as any) as T;
+  };
+
+  __orbitSandboxPatchCount = 1;
+}
+
+function __orbitRemoveAppendPatch(): void {
+  __orbitSandboxPatchCount = Math.max(0, __orbitSandboxPatchCount - 1);
+  if (__orbitSandboxPatchCount === 0) {
+    try {
+      Node.prototype.appendChild = __orbitOrigAppendChild;
+    } catch {
+      // ignore
+    }
+  }
+}
+
+// ------------------------------------------------------------------------------
+
 function hasStylesheetLink(url: string): boolean {
   const links = document.querySelectorAll('link[rel="stylesheet"]');
   return Array.from(links).some((link) => {
@@ -638,6 +699,60 @@ export async function installAndLoadPlugin(
     name: plugin.name,
     version: plugin.version
   });
+  // Wrap plugin to isolate its DOM and styles inside a shadow root that we
+  // attach to the plugin mount point. This prevents third-party plugins from
+  // injecting global `body`, `*`, or heading styles into the host document.
+  const sandboxedPlugin = {
+    ...plugin,
+    mount(host: HTMLElement, context: unknown) {
+      // Create a wrapper and a shadow root. Append the wrapper into the host
+      // element so the plugin's internal mapping (which expects the original
+      // host element) continues to work.
+      const wrapper = document.createElement('div');
+      wrapper.className = `orbit-plugin-sandbox ${plugin.id}`;
+      host.appendChild(wrapper);
 
-  return plugin;
+      const shadow = wrapper.attachShadow({ mode: 'open' });
+
+      // Register the host -> shadow mapping and enable the global appendChild
+      // patch so subsequent DOM/style appends are redirected into the shadow.
+      __orbitSandboxRegistry.set(host, shadow);
+      __orbitApplyAppendPatch();
+
+      try {
+        return plugin.mount(host, context as any);
+      } catch (err) {
+        // On mount error, ensure we clean up the registry and patch state.
+        __orbitSandboxRegistry.delete(host);
+        __orbitRemoveAppendPatch();
+        throw err;
+      }
+    },
+    async unmount(host: HTMLElement) {
+      try {
+        const res = plugin.unmount(host as any);
+        await Promise.resolve(res);
+      } finally {
+        // Remove the wrapper (which contains the shadow root and any styles)
+        try {
+          const wrapper = host.querySelector(`.orbit-plugin-sandbox.${plugin.id}`) as HTMLElement | null;
+          if (wrapper && wrapper.parentNode) {
+            wrapper.parentNode.removeChild(wrapper);
+          } else {
+            const fallback = host.querySelector('.orbit-plugin-sandbox') as HTMLElement | null;
+            if (fallback && fallback.parentNode) {
+              fallback.parentNode.removeChild(fallback);
+            }
+          }
+        } catch {
+          // ignore
+        }
+
+        __orbitSandboxRegistry.delete(host);
+        __orbitRemoveAppendPatch();
+      }
+    }
+  };
+
+  return sandboxedPlugin;
 }
