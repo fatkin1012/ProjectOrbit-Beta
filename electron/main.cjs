@@ -1,5 +1,6 @@
 const path = require('node:path');
 const fs = require('node:fs/promises');
+const fsSync = require('node:fs');
 const { app, BrowserWindow } = require('electron');
 const { ipcMain } = require('electron');
 
@@ -33,12 +34,32 @@ async function writeInstalledPluginsFile(payload) {
 }
 
 function createWindow() {
+  // Resolve an icon from electron/assets if present (ico/icns/png)
+  const iconCandidates = [
+    path.join(__dirname, 'assets', 'icon.ico'),
+    path.join(__dirname, 'assets', 'icon.icns'),
+    path.join(__dirname, 'assets', 'icon.png')
+  ];
+
+  let resolvedIcon = null;
+  for (const p of iconCandidates) {
+    try {
+      if (fsSync.existsSync(p)) {
+        resolvedIcon = p;
+        break;
+      }
+    } catch (err) {
+      // ignore
+    }
+  }
+
   const window = new BrowserWindow({
     width: 1400,
     height: 900,
     minWidth: 1100,
     minHeight: 700,
     autoHideMenuBar: true,
+    icon: resolvedIcon || undefined,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
