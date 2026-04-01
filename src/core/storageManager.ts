@@ -15,6 +15,23 @@ interface ToolboxDBSchema extends DBSchema {
   };
 }
 
+interface BackupStoreEntry<K, V> {
+  key: K;
+  value: V;
+}
+
+export interface IndexedDbBackupV1 {
+  format: 'orbit-indexeddb-backup';
+  schemaVersion: 1;
+  dbName: string;
+  dbVersion: number;
+  exportedAt: number;
+  stores: {
+    kv: Array<BackupStoreEntry<string, IDataEnvelope<unknown>>>;
+    pluginCode: Array<BackupStoreEntry<string, { code: string; updatedAt: number }>>;
+  };
+}
+
 export interface StorageAuditRecord {
   ts: number;
   pluginId: string;
@@ -143,6 +160,46 @@ function extractEnvelopePayload<T>(envelope: IDataEnvelope<unknown>): {
   }
 
   return { ok: false, payload: null, migratedFromLegacyData: false };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function assertIndexedDbBackupV1(raw: unknown): asserts raw is IndexedDbBackupV1 {
+  if (!isRecord(raw)) {
+    throw new Error('Backup payload must be a JSON object.');
+  }
+
+  if (raw.format !== 'orbit-indexeddb-backup' || raw.schemaVersion !== 1) {
+    throw new Error('Unsupported backup format or schema version.');
+  }
+
+  if (!isRecord(raw.stores)) {
+    throw new Error('Backup stores are missing.');
+  }
+
+  if (!Array.isArray(raw.stores.kv) || !Array.isArray(raw.stores.pluginCode)) {
+    throw new Error('Backup store data is invalid.');
+  }
+
+  for (const entry of raw.stores.kv) {
+    if (!isRecord(entry) || typeof entry.key !== 'string' || !isRecord(entry.value)) {
+      throw new Error('Backup kv store entries are invalid.');
+    }
+  }
+
+  for (const entry of raw.stores.pluginCode) {
+    if (
+      !isRecord(entry) ||
+      typeof entry.key !== 'string' ||
+      !isRecord(entry.value) ||
+      typeof entry.value.code !== 'string' ||
+      typeof entry.value.updatedAt !== 'number'
+    ) {
+      throw new Error('Backup pluginCode store entries are invalid.');
+    }
+  }
 }
 
 function appendStorageAudit(record: StorageAuditRecord): void {
@@ -396,4 +453,64 @@ export async function clearPluginCodeCache(): Promise<number> {
 
   await tx.done;
   return keys.length;
+}
+
+export async function exportIndexedDbBackup(): Promise<IndexedDbBackupV1> {
+  const db = await getDb();
+  const tx = db.transaction([KV_STORE, CODE_STORE], 'readonly');
+
+  const kvStore = tx.objectStore(KV_STORE);
+  const [kvKeys, kvValues] = await Promise.all([kvStore.getAllKeys(), kvStore.getAll()]);
+
+  const codeStore = tx.objectStore(CODE_STORE);
+  const [codeKeys, codeValues] = await Promise.all([codeStore.getAllKeys(), codeStore.getAll()]);
+
+  await tx.done;
+
+  const kv = kvKeys.map((key, index) => ({
+    key: String(key),
+    value: kvValues[index]
+  }));
+
+  const pluginCode = codeKeys.map((key, index) => ({
+    key: String(key),
+    value: codeValues[index]
+  }));
+
+  return {
+    format: 'orbit-indexeddb-backup',
+    schemaVersion: 1,
+    dbName: DB_NAME,
+    dbVersion: DB_VERSION,
+    exportedAt: Date.now(),
+    stores: {
+      kv,
+      pluginCode
+    }
+  };
+}
+
+export async function importIndexedDbBackup(raw: unknown): Promise<{ kvCount: number; codeCount: number }> {
+  assertIndexedDbBackupV1(raw);
+
+  const db = await getDb();
+  const tx = db.transaction([KV_STORE, CODE_STORE], 'readwrite');
+
+  await tx.objectStore(KV_STORE).clear();
+  await tx.objectStore(CODE_STORE).clear();
+
+  for (const entry of raw.stores.kv) {
+    await tx.objectStore(KV_STORE).put(entry.value, entry.key);
+  }
+
+  for (const entry of raw.stores.pluginCode) {
+    await tx.objectStore(CODE_STORE).put(entry.value, entry.key);
+  }
+
+  await tx.done;
+
+  return {
+    kvCount: raw.stores.kv.length,
+    codeCount: raw.stores.pluginCode.length
+  };
 }

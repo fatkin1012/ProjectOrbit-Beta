@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { IPlugin } from '@toolbox/sdk';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { PluginContainer } from './components/PluginContainer';
@@ -6,7 +6,9 @@ import { installAndLoadPlugin, normalizePluginSourceUrl } from './core/pluginLoa
 import {
   clearPluginCodeCache,
   clearStorageAuditRecords,
+  exportIndexedDbBackup,
   getStorageAuditRecords,
+  importIndexedDbBackup,
   runStorageProbe,
   type StorageAuditRecord
 } from './core/storageManager';
@@ -197,8 +199,11 @@ export default function App() {
   const [probeMessage, setProbeMessage] = useState('');
   const [isProbing, setIsProbing] = useState(false);
   const [isClearingPluginCache, setIsClearingPluginCache] = useState(false);
+  const [isExportingBackup, setIsExportingBackup] = useState(false);
+  const [isImportingBackup, setIsImportingBackup] = useState(false);
   const [auditRecords, setAuditRecords] = useState<StorageAuditRecord[]>([]);
   const [updatingPluginId, setUpdatingPluginId] = useState<string | null>(null);
+  const importBackupInputRef = useRef<HTMLInputElement | null>(null);
 
   const activeInstalledPlugin = useMemo(() => {
     const pluginIdFromPane = toPluginIdFromPane(activePane);
@@ -319,6 +324,74 @@ export default function App() {
       setProbeMessage(`Failed to clear plugin cache: ${message}`);
     } finally {
       setIsClearingPluginCache(false);
+    }
+  }
+
+  async function handleExportIndexedDbBackup(): Promise<void> {
+    setIsExportingBackup(true);
+
+    try {
+      const backup = await exportIndexedDbBackup();
+      const payload = JSON.stringify(backup, null, 2);
+      const blob = new Blob([payload], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const timestamp = new Date().toISOString().replace(/[.:]/g, '-');
+
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `orbit-indexeddb-backup-${timestamp}.json`;
+      document.body.append(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+
+      setProbeMessage(
+        `Backup exported: ${backup.stores.kv.length} kv entries and ${backup.stores.pluginCode.length} plugin code entries.`
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown backup export error.';
+      setProbeMessage(`Backup export failed: ${message}`);
+    } finally {
+      setIsExportingBackup(false);
+    }
+  }
+
+  function handleOpenImportBackupPicker(): void {
+    importBackupInputRef.current?.click();
+  }
+
+  async function handleImportIndexedDbBackup(event: React.ChangeEvent<HTMLInputElement>): Promise<void> {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      'Importing this backup will replace all current IndexedDB data. Continue?'
+    );
+    if (!confirmed) {
+      event.target.value = '';
+      return;
+    }
+
+    setIsImportingBackup(true);
+
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text) as unknown;
+      const result = await importIndexedDbBackup(parsed);
+      setProbeMessage(
+        `Backup imported from ${file.name}: ${result.kvCount} kv entries and ${result.codeCount} plugin code entries restored.`
+      );
+
+      const activeId = activeInstalledPlugin?.id;
+      setAuditRecords(getStorageAuditRecords(activeId));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown backup import error.';
+      setProbeMessage(`Backup import failed: ${message}`);
+    } finally {
+      setIsImportingBackup(false);
+      event.target.value = '';
     }
   }
 
@@ -661,9 +734,32 @@ export default function App() {
                     >
                       {isClearingPluginCache ? 'Clearing Plugin Cache...' : 'Clear Plugin Cache'}
                     </button>
+                    <button
+                      type="button"
+                      className="host-btn"
+                      onClick={handleExportIndexedDbBackup}
+                      disabled={isExportingBackup || isImportingBackup}
+                    >
+                      {isExportingBackup ? 'Exporting Backup...' : 'Export IndexedDB Backup'}
+                    </button>
+                    <button
+                      type="button"
+                      className="host-btn"
+                      onClick={handleOpenImportBackupPicker}
+                      disabled={isImportingBackup || isExportingBackup}
+                    >
+                      {isImportingBackup ? 'Importing Backup...' : 'Import IndexedDB Backup'}
+                    </button>
                     <button type="button" className="host-btn inline-delete-btn" onClick={handleClearAudit}>
                       Clear Audit
                     </button>
+                    <input
+                      ref={importBackupInputRef}
+                      type="file"
+                      accept="application/json,.json"
+                      onChange={handleImportIndexedDbBackup}
+                      hidden
+                    />
                   </div>
 
                   {probeMessage && <p className="muted probe-message">{probeMessage}</p>}
