@@ -328,6 +328,59 @@ body.orbit-hub-view #root {
   font-weight: 700;
 }
 
+.installed-plugin-name-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.plugin-name-edit-btn {
+  width: 1.02rem;
+  height: 1.02rem;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.plugin-name-edit-btn:hover {
+  color: var(--color-text);
+}
+
+.plugin-name-edit-btn:focus-visible {
+  outline: 2px solid rgba(47, 47, 47, 0.35);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.plugin-name-edit-icon {
+  width: 1em;
+  height: 1em;
+}
+
+.plugin-name-input {
+  width: min(100%, 210px);
+  min-height: 34px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-soft);
+  color: var(--color-text);
+  font-size: 1.02rem;
+  font-weight: 700;
+  line-height: 1.2;
+  padding: 0.18rem 0.45rem;
+}
+
+.plugin-name-input:focus-visible {
+  outline: none;
+  border-color: var(--color-focus);
+  box-shadow: 0 0 0 3px rgba(47, 47, 47, 0.18);
+}
+
 .installed-actions {
   display: flex;
   justify-content: center;
@@ -615,15 +668,24 @@ body.orbit-hub-view #root {
 
 .plugin-back-btn {
   position: fixed;
-  top: 0.9rem;
+  bottom: 0.9rem;
   right: 0.9rem;
+  left: auto;
   margin-top: 0;
-  min-height: 40px;
-  padding: 0.25rem 0.9rem;
-  font-size: 0.9rem;
-  border-radius: var(--radius-sm);
+  min-height: 44px;
+  width: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 999px;
   z-index: 2147483647;
   opacity: 0.96;
+}
+
+.plugin-back-icon {
+  width: 20px;
+  height: 20px;
 }
 
 @keyframes spin {
@@ -707,8 +769,9 @@ body.orbit-hub-view #root {
   }
 
   .plugin-back-btn {
-    left: 0.75rem;
-    right: auto;
+    right: 0.75rem;
+    bottom: 0.75rem;
+    left: auto;
   }
 }
 

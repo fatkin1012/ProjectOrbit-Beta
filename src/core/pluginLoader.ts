@@ -636,6 +636,16 @@ export function normalizePluginSourceUrl(inputUrl: string): string {
     }
   }
 
+  // Allow users to paste a repository URL and assume the default plugin artifact path.
+  if (pathParts.length === 2) {
+    const owner = pathParts[0];
+    const repo = pathParts[1];
+
+    if (owner && repo) {
+      return `https://raw.githubusercontent.com/${owner}/${repo}/main/dist/plugin.js`;
+    }
+  }
+
   return trimmed;
 }
 

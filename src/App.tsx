@@ -23,7 +23,7 @@ interface InstalledPlugin {
 }
 
 const DEFAULT_PLUGIN_URL =
-  'https://raw.githubusercontent.com/example/toolbox-plugins/main/dist/hello-plugin.js';
+  'https://github.com/fatkin1012/Orbit-Shudoku';
 
 type StaticHubPane = 'workspace' | 'installed' | 'operations';
 type PluginHubPane = `plugin:${string}`;
@@ -31,6 +31,7 @@ type HubPane = StaticHubPane | PluginHubPane;
 type UrlConversionMode = 'none' | 'raw' | 'jsdelivr';
 
 const INSTALLED_PLUGINS_STORAGE_KEY = 'orbit-hub.installed-plugins';
+const URL_CONVERSION_MODE_STORAGE_KEY = 'orbit-hub.url-conversion-mode';
 
 const URL_CONVERSION_OPTIONS: Array<{ value: UrlConversionMode; label: string }> = [
   { value: 'none', label: 'Keep input URL as-is' },
@@ -87,6 +88,15 @@ function normalizeInstalledPlugins(raw: string | null): InstalledPlugin[] {
 
 function loadInstalledPluginsFromLocalStorage(): InstalledPlugin[] {
   return normalizeInstalledPlugins(localStorage.getItem(INSTALLED_PLUGINS_STORAGE_KEY));
+}
+
+function loadUrlConversionModeFromLocalStorage(): UrlConversionMode {
+  const raw = localStorage.getItem(URL_CONVERSION_MODE_STORAGE_KEY);
+  if (raw === 'none' || raw === 'raw' || raw === 'jsdelivr') {
+    return raw;
+  }
+
+  return 'none';
 }
 
 async function loadInstalledPluginsFromDesktopBridge(): Promise<InstalledPlugin[] | null> {
@@ -191,7 +201,9 @@ function convertPluginUrlByMode(inputUrl: string, mode: UrlConversionMode): stri
 export default function App() {
   const [activePane, setActivePane] = useState<HubPane>('workspace');
   const [sourceUrl, setSourceUrl] = useState(DEFAULT_PLUGIN_URL);
-  const [urlConversionMode, setUrlConversionMode] = useState<UrlConversionMode>('none');
+  const [urlConversionMode, setUrlConversionMode] = useState<UrlConversionMode>(() =>
+    loadUrlConversionModeFromLocalStorage()
+  );
   const [installedPlugins, setInstalledPlugins] = useState<InstalledPlugin[]>([]);
   const [isInstalledPluginsHydrated, setIsInstalledPluginsHydrated] = useState(false);
   const [validationError, setValidationError] = useState('');
@@ -203,6 +215,8 @@ export default function App() {
   const [isImportingBackup, setIsImportingBackup] = useState(false);
   const [auditRecords, setAuditRecords] = useState<StorageAuditRecord[]>([]);
   const [updatingPluginId, setUpdatingPluginId] = useState<string | null>(null);
+  const [editingPluginId, setEditingPluginId] = useState<string | null>(null);
+  const [editingPluginNameDraft, setEditingPluginNameDraft] = useState('');
   const importBackupInputRef = useRef<HTMLInputElement | null>(null);
 
   const activeInstalledPlugin = useMemo(() => {
@@ -263,6 +277,10 @@ export default function App() {
 
     void persistInstalledPlugins(installedPlugins);
   }, [installedPlugins, isInstalledPluginsHydrated]);
+
+  useEffect(() => {
+    localStorage.setItem(URL_CONVERSION_MODE_STORAGE_KEY, urlConversionMode);
+  }, [urlConversionMode]);
 
   useEffect(() => {
     const activeId = activeInstalledPlugin?.id;
@@ -464,6 +482,43 @@ export default function App() {
     }, 600);
   }
 
+  function startEditingPluginName(plugin: InstalledPlugin): void {
+    setEditingPluginId(plugin.id);
+    setEditingPluginNameDraft(plugin.name);
+  }
+
+  function cancelEditingPluginName(): void {
+    setEditingPluginId(null);
+    setEditingPluginNameDraft('');
+  }
+
+  function commitEditingPluginName(pluginId: string): void {
+    const nextName = editingPluginNameDraft.trim();
+    const target = installedPlugins.find((plugin) => plugin.id === pluginId);
+    if (!target) {
+      cancelEditingPluginName();
+      return;
+    }
+
+    if (!nextName || nextName === target.name) {
+      cancelEditingPluginName();
+      return;
+    }
+
+    setInstalledPlugins((previous) =>
+      previous.map((plugin) =>
+        plugin.id === pluginId
+          ? {
+              ...plugin,
+              name: nextName
+            }
+          : plugin
+      )
+    );
+
+    cancelEditingPluginName();
+  }
+
   async function onInstall(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -577,9 +632,12 @@ export default function App() {
                         type="url"
                         value={sourceUrl}
                         onChange={(event) => setSourceUrl(event.target.value)}
-                        placeholder="https://.../plugin.js"
+                        placeholder="https://github.com/owner/repo or https://.../plugin.js"
                         autoComplete="off"
                       />
+                      <p className="muted plugin-url-preview">
+                        Repo URL will auto-resolve to /main/dist/plugin.js.
+                      </p>
 
                       <div className="plugin-url-tools">
                         <label htmlFor="plugin-url-conversion">URL conversion</label>
@@ -665,7 +723,62 @@ export default function App() {
                       {installedPlugins.map((plugin) => (
                         <li key={`installed-pane-${plugin.id}`}>
                           <div className="installed-plugin-meta">
-                            <strong>{plugin.name}</strong>
+                            {editingPluginId === plugin.id ? (
+                              <input
+                                className="plugin-name-input"
+                                value={editingPluginNameDraft}
+                                onChange={(event) => setEditingPluginNameDraft(event.target.value)}
+                                onBlur={() => commitEditingPluginName(plugin.id)}
+                                onKeyDown={(event) => {
+                                  if (event.key === 'Enter') {
+                                    event.preventDefault();
+                                    commitEditingPluginName(plugin.id);
+                                  }
+
+                                  if (event.key === 'Escape') {
+                                    event.preventDefault();
+                                    cancelEditingPluginName();
+                                  }
+                                }}
+                                aria-label={`Rename ${plugin.name}`}
+                                autoFocus
+                              />
+                            ) : (
+                              <div className="installed-plugin-name-row">
+                                <strong>{plugin.name}</strong>
+                                <button
+                                  type="button"
+                                  className="plugin-name-edit-btn"
+                                  onClick={() => startEditingPluginName(plugin)}
+                                  aria-label={`Edit name for ${plugin.name}`}
+                                  title="Edit plugin name"
+                                >
+                                  <svg
+                                    viewBox="0 0 24 24"
+                                    aria-hidden="true"
+                                    focusable="false"
+                                    className="plugin-name-edit-icon"
+                                  >
+                                    <path
+                                      d="M4 20h4l10.5-10.5a1.9 1.9 0 0 0 0-2.7L17.2 5.5a1.9 1.9 0 0 0-2.7 0L4 16v4z"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      strokeWidth="2"
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                    />
+                                    <path
+                                      d="M13 7l4 4"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      strokeWidth="2"
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                    />
+                                  </svg>
+                                </button>
+                              </div>
+                            )}
                             <small>({plugin.id})</small>
                             <small>Last active: {formatLastActive(plugin.lastOpenedAt)}</small>
                           </div>
@@ -809,8 +922,32 @@ export default function App() {
                 type="button"
                 className="host-btn plugin-back-btn"
                 onClick={() => setActivePane('workspace')}
+                aria-label="Back to hub"
+                title="Back to hub"
               >
-                Back To Hub
+                <svg
+                  className="plugin-back-icon"
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                  focusable="false"
+                >
+                  <path
+                    d="M3 11.5L12 4l9 7.5"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                  <path
+                    d="M6.5 10.5V20h11V10.5"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
               </button>
               <PluginContainer
                 key={`persisted-${plugin.id}-${plugin.url}-${plugin.revision}`}
