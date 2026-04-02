@@ -205,6 +205,14 @@ function toCompanionCssCandidates(moduleUrl: string): string[] {
   return cssNames.map((name) => new URL(name, baseHref).toString());
 }
 
+function hasStylesheetLinkInRoot(root: ParentNode, url: string): boolean {
+  const links = root.querySelectorAll('link[rel="stylesheet"]');
+  return Array.from(links).some((link) => {
+    const href = (link as HTMLLinkElement).href;
+    return href === url || href.startsWith(`${url}?`);
+  });
+}
+
 // --- Plugin sandboxing helpers -------------------------------------------------
 // Map host mount elements to their shadow roots and owning plugin id so we
 // can redirect plugin DOM and style insertions into an isolated shadow root
@@ -537,17 +545,13 @@ function __orbitRemoveAppendPatch(): void {
 
 // ------------------------------------------------------------------------------
 
-function hasStylesheetLink(url: string): boolean {
-  const links = document.querySelectorAll('link[rel="stylesheet"]');
-  return Array.from(links).some((link) => {
-    const href = (link as HTMLLinkElement).href;
-    return href === url || href.startsWith(`${url}?`);
-  });
-}
-
-async function loadCompanionStylesheet(url: string, pluginId: string): Promise<boolean> {
-  if (hasStylesheetLink(url)) {
-    debugLog('stylesheet already loaded, skipping', { pluginId, url });
+async function loadCompanionStylesheetIntoRoot(
+  root: ParentNode,
+  url: string,
+  pluginId: string
+): Promise<boolean> {
+  if (hasStylesheetLinkInRoot(root, url)) {
+    debugLog('stylesheet already loaded in target root, skipping', { pluginId, url });
     return true;
   }
 
@@ -568,16 +572,20 @@ async function loadCompanionStylesheet(url: string, pluginId: string): Promise<b
       resolve(false);
     };
 
-    document.head.appendChild(link);
+    root.appendChild(link);
   });
 }
 
-async function ensurePluginStyles(pluginId: string, moduleUrl: string): Promise<void> {
+async function ensurePluginStylesInShadow(
+  shadow: ShadowRoot,
+  pluginId: string,
+  moduleUrl: string
+): Promise<void> {
   const candidates = toCompanionCssCandidates(moduleUrl);
   debugLog('probing companion stylesheet candidates', { pluginId, candidates });
 
   for (const candidate of candidates) {
-    const ok = await loadCompanionStylesheet(candidate, pluginId);
+    const ok = await loadCompanionStylesheetIntoRoot(shadow, candidate, pluginId);
     if (ok) {
       return;
     }
@@ -684,6 +692,7 @@ export async function installAndLoadPlugin(
   let jsCode = '';
   let moduleExports: Record<string, unknown> | null = null;
   let importedFromUrl: string | null = null;
+  let fetchedFromUrl: string | null = null;
   let rawImportError: unknown = null;
 
   debugLog('installAndLoadPlugin start', { pluginId, url, normalizedUrl });
@@ -691,7 +700,6 @@ export async function installAndLoadPlugin(
   try {
     const fetchCandidates = getPreferredFetchCandidates(normalizedUrl);
     let response: Response | null = null;
-    let fetchedFromUrl: string | null = null;
     let lastFetchError: unknown = null;
 
     debugLog('trying fetch candidates', { pluginId, fetchCandidates });
@@ -875,9 +883,6 @@ export async function installAndLoadPlugin(
       );
     }
 
-    if (importedFromUrl) {
-      await ensurePluginStyles(pluginId, importedFromUrl);
-    }
   } catch (fetchError) {
     if (isAbortError(fetchError)) {
       throw fetchError;
@@ -923,10 +928,6 @@ export async function installAndLoadPlugin(
     }
 
     if (moduleExports) {
-      if (importedFromUrl) {
-        await ensurePluginStyles(pluginId, importedFromUrl);
-      }
-
       return normalizePlugin(resolvePluginExport(moduleExports), pluginId) ?? (() => {
         throw new Error('Plugin module failed contract validation after direct URL import fallback.');
       })();
@@ -949,6 +950,8 @@ export async function installAndLoadPlugin(
   if (!moduleExports) {
     throw new Error('Plugin module failed to load.');
   }
+
+  const companionStyleSourceUrl = importedFromUrl ?? fetchedFromUrl ?? normalizedUrl;
 
   const pluginCandidate = resolvePluginExport(moduleExports);
   const plugin = normalizePlugin(pluginCandidate, pluginId);
@@ -1000,6 +1003,8 @@ export async function installAndLoadPlugin(
       // patch so subsequent DOM/style appends are redirected into the shadow.
       __orbitSandboxRegistry.set(host, { shadow, pluginId: plugin.id });
       __orbitApplyAppendPatch();
+
+      void ensurePluginStylesInShadow(shadow, plugin.id, companionStyleSourceUrl);
 
       // If we have cached plugin styles/vars from a previous mount, reapply
       // them into the new shadow root and onto the wrapper so the UI retains

@@ -1,0 +1,148 @@
+以下是可直接落地在你目前架構的「插件對插件通訊規範 v1.0（草案）」。
+
+現況依據：
+- 事件通道已存在於 eventBus.ts
+- 每個插件都會拿到同一個 event bus（context 注入）於 contextFactory.ts
+- 插件生命週期與掛載行為在 PluginContainer.tsx
+- SDK 介面型別在 index.ts
+- 可持久化資料封裝在 storageManager.ts
+
+**1. 規範目標**
+1. 提供可預測、可追蹤、可回溯的插件間通訊。
+2. 支援兩種聯動模式：即時通知、延遲同步。
+3. 在單插件活躍掛載模型下仍可運作（你現在的主要情境）。
+4. 保持向後相容，避免插件升級互相破壞。
+
+**2. 適用範圍與限制**
+1. 傳輸通道
+- 即時通道：event bus（emit/on/off）
+- 持久通道：storage（用於跨時間同步）
+2. 限制
+- 目前 UI 一次只活躍一個插件頁面，未活躍插件不會收到即時事件。
+- 因此跨插件聯動必須預設可退化為「事件 + 持久化狀態」雙軌。
+
+**3. 核心名詞**
+1. Source Plugin：發送事件的插件
+2. Target Plugin：接收事件的插件（可為廣播）
+3. Domain Event：業務事件，例如 task.created
+4. Command Event：命令事件，例如 calendar.refresh.request
+5. State Sync Record：寫入 storage 的同步資料
+
+**4. 事件命名規範**
+1. 格式
+- orbit.<domain>.<action>.<phase>
+2. 範例
+- orbit.task.created.final
+- orbit.calendar.refresh.request
+- orbit.calendar.refresh.result
+3. 規則
+- domain 使用單數名詞
+- action 使用動詞過去式或命令式
+- phase 只允許 draft、final、request、result、error
+- 禁止使用無語意名稱（例如 update、change）
+
+**5. 事件封包規格**
+所有插件間事件都使用同一個 envelope：
+
+    interface PluginEventEnvelope<T = unknown> {
+      specVersion: '1.0';
+      eventId: string;                // UUID
+      eventName: string;              // orbit.task.created.final
+      sourcePluginId: string;         // 發送方
+      targetPluginId?: string;        // 指定接收方；省略代表廣播
+      correlationId?: string;         // request/result 關聯
+      timestamp: number;              // epoch ms
+      ttlMs?: number;                 // 過期時間，預設 30000
+      dedupeKey?: string;             // 冪等鍵
+      payload: T;                     // 業務資料
+      meta?: {
+        schemaVersion?: string;       // payload schema 版本
+        priority?: 'low' | 'normal' | 'high';
+      };
+    }
+
+驗證規則：
+1. eventId、eventName、sourcePluginId 必填。
+2. ttlMs 到期後接收端應忽略。
+3. targetPluginId 存在時，非目標插件必須忽略。
+4. payload 必須可 JSON 序列化。
+
+**6. 通訊模式**
+1. Fire-and-forget（通知）
+- Source emit 後不等待回覆
+- 適合 UI 刷新、提示、輕量同步
+2. Request/Result（請求回應）
+- request 帶 correlationId
+- result 或 error 必須回傳同一 correlationId
+- 超時建議 3 至 5 秒
+3. Durable Sync（延遲同步）
+- Source 先寫 storage 再 emit 通知
+- Target 啟動時主動讀 storage，補齊離線期間變更
+
+**7. 錯誤與重試規範**
+1. 錯誤事件命名
+- orbit.<domain>.<action>.error
+2. 錯誤 payload 最低欄位
+- code、message、recoverable、correlationId
+3. 重試策略
+- 只重試可恢復錯誤
+- 指數退避：300ms、900ms、2700ms，最多 3 次
+4. 冪等
+- 接收端以 dedupeKey 或 eventId 做短期去重（建議 60 秒窗口）
+
+**8. 相容性策略**
+1. Envelope 版本以 specVersion 管理，初版固定 1.0。
+2. Payload 版本以 meta.schemaVersion 管理。
+3. 新增欄位只能向後相容，不可改變既有欄位語意。
+4. 移除欄位需經過至少一個次版本的 deprecated 週期。
+
+**9. 安全與邊界**
+1. 插件不得信任外部插件 payload，必做型別與內容檢查。
+2. 不允許在事件中傳遞敏感憑證。
+3. 大 payload 禁止走 event bus，改傳 key 再由接收端讀 storage。
+4. 建議單一事件 payload 上限 32KB。
+
+**10. 生命週期要求（必做）**
+1. mount 時註冊監聽。
+2. unmount 時解除監聽（off）。
+3. 監聽器內錯誤必捕捉，避免污染 bus。
+4. 插件啟動時執行一次 state catch-up（讀 storage 補狀態）。
+
+**11. 你專案的建議預設事件集**
+1. orbit.shared.state.changed.final
+2. orbit.shared.state.sync.request
+3. orbit.shared.state.sync.result
+4. orbit.shared.state.sync.error
+
+**12. 最小實作範例（協定用）**
+
+    // 發送端
+    const envelope = {
+      specVersion: '1.0',
+      eventId: crypto.randomUUID(),
+      eventName: 'orbit.shared.state.changed.final',
+      sourcePluginId: context.initialConfig.pluginId as string,
+      timestamp: Date.now(),
+      dedupeKey: 'task:123:v5',
+      payload: { entity: 'task', id: '123', version: 5 }
+    };
+    context.eventBus.emit(envelope.eventName, envelope);
+
+    // 接收端
+    const handler = (evt) => {
+      if (!evt || evt.specVersion !== '1.0') return;
+      if (evt.targetPluginId && evt.targetPluginId !== myPluginId) return;
+      // 讀 storage 做最終一致性
+    };
+    context.eventBus.on('orbit.shared.state.changed.final', handler);
+    // unmount 時 context.eventBus.off(...)
+
+**13. 驗收清單**
+1. A 發事件，B 可收到且通過 envelope 驗證。
+2. B 未掛載時，重開後可從 storage 同步狀態。
+3. request/result 在超時與錯誤路徑可正確結束。
+4. 重複事件不會造成重複寫入。
+5. unmount 後無殘留監聽器。
+
+
+

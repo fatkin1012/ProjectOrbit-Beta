@@ -36,6 +36,9 @@ async function writeInstalledPluginsFile(payload) {
 function createWindow() {
   // Resolve an icon from electron/assets if present (ico/icns/png)
   const iconCandidates = [
+    path.join(process.resourcesPath, 'assets', 'icon.ico'),
+    path.join(process.resourcesPath, 'assets', 'icon.icns'),
+    path.join(process.resourcesPath, 'assets', 'icon.png'),
     path.join(__dirname, 'assets', 'icon.ico'),
     path.join(__dirname, 'assets', 'icon.icns'),
     path.join(__dirname, 'assets', 'icon.png')
