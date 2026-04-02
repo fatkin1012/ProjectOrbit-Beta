@@ -112,12 +112,12 @@ C) Zod 驗證
 ====================================
 
 請加上：
-- [task-board] restore start
-- [task-board] restore payload（preview + extractedPath）
-- [task-board] restore success（count + source）
-- [task-board] restore failed（error）
-- [task-board] save triggered（count）
-- [task-board] save failed（error）
+- [plugin] restore start
+- [plugin] restore payload（preview + extractedPath）
+- [plugin] restore success（count + source）
+- [plugin] restore failed（error）
+- [plugin] save triggered（count）
+- [plugin] save failed（error）
 
 ====================================
 6. 插件發佈與載入 URL 規範
