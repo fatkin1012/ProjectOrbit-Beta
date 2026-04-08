@@ -16,6 +16,8 @@ import {
 interface InstalledPlugin {
   id: string;
   name: string;
+  runtimeName: string;
+  customName: boolean;
   version: string;
   url: string;
   lastOpenedAt: number;
@@ -75,6 +77,15 @@ function normalizeInstalledPlugins(raw: string | null): InstalledPlugin[] {
       )
       .map((item) => ({
         ...item,
+        runtimeName:
+          typeof (item as Partial<InstalledPlugin>).runtimeName === 'string' &&
+          (item as InstalledPlugin).runtimeName.trim()
+            ? (item as InstalledPlugin).runtimeName
+            : (item as InstalledPlugin).name,
+        customName:
+          typeof (item as Partial<InstalledPlugin>).customName === 'boolean'
+            ? (item as InstalledPlugin).customName
+            : false,
         revision:
           typeof (item as Partial<InstalledPlugin>).revision === 'number'
             ? (item as InstalledPlugin).revision
@@ -419,21 +430,39 @@ export default function App() {
     options?: { forceReload?: boolean }
   ): void {
     setInstalledPlugins((previous) => {
-      const existing = previous.find((item) => item.id === plugin.id);
+      const normalizedUrl = normalizePluginSourceUrl(url);
+      const existing =
+        previous.find((item) => item.id === plugin.id) ??
+        previous.find((item) => normalizePluginSourceUrl(item.url) === normalizedUrl);
       const now = Date.now();
+      const hasCustomName = Boolean(existing?.customName && existing.name.trim());
       const nextRecord: InstalledPlugin = {
         id: plugin.id,
-        name: plugin.name,
+        name: hasCustomName ? existing!.name : plugin.name,
+        runtimeName: plugin.name,
+        customName: existing?.customName ?? false,
         version: plugin.version,
         url,
         lastOpenedAt: now,
         revision: options?.forceReload ? now : existing?.revision ?? now
       };
 
-      const withoutCurrent = previous.filter((item) => item.id !== plugin.id);
+      const withoutCurrent = previous.filter(
+        (item) =>
+          item.id !== plugin.id &&
+          normalizePluginSourceUrl(item.url) !== normalizedUrl
+      );
       return [nextRecord, ...withoutCurrent];
     });
     setActivePane(pluginPaneId(plugin.id));
+  }
+
+  function openPluginPane(targetPluginId: string): void {
+    if (editingPluginId) {
+      commitEditingPluginName(editingPluginId);
+    }
+
+    setActivePane(pluginPaneId(targetPluginId));
   }
 
   function removeInstalledPlugin(targetPluginId: string): void {
@@ -510,7 +539,8 @@ export default function App() {
         plugin.id === pluginId
           ? {
               ...plugin,
-              name: nextName
+              name: nextName,
+              customName: nextName !== plugin.runtimeName
             }
           : plugin
       )
@@ -691,7 +721,7 @@ export default function App() {
                               <button
                                 type="button"
                                 className="host-btn inline-open-btn"
-                                onClick={() => setActivePane(pluginPaneId(plugin.id))}
+                                onClick={() => openPluginPane(plugin.id)}
                               >
                                 Open
                               </button>
@@ -786,7 +816,7 @@ export default function App() {
                             <button
                               type="button"
                               className="host-btn inline-open-btn"
-                              onClick={() => setActivePane(pluginPaneId(plugin.id))}
+                              onClick={() => openPluginPane(plugin.id)}
                             >
                               Open
                             </button>
