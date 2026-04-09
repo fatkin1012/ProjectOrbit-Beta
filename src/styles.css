@@ -667,10 +667,11 @@ body.orbit-hub-view #root {
 }
 
 .plugin-back-btn {
-  position: fixed;
-  bottom: 0.9rem;
-  right: 0.9rem;
-  left: auto;
+  position: fixed !important;
+  right: max(0.9rem, env(safe-area-inset-right, 0px)) !important;
+  bottom: max(0.9rem, env(safe-area-inset-bottom, 0px)) !important;
+  left: auto !important;
+  top: auto !important;
   margin-top: 0;
   min-height: 44px;
   width: 44px;
@@ -769,9 +770,9 @@ body.orbit-hub-view #root {
   }
 
   .plugin-back-btn {
-    right: 0.75rem;
-    bottom: 0.75rem;
-    left: auto;
+    right: max(0.75rem, env(safe-area-inset-right, 0px)) !important;
+    bottom: max(0.75rem, env(safe-area-inset-bottom, 0px)) !important;
+    left: auto !important;
   }
 }
 

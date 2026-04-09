@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { IPlugin } from '@toolbox/sdk';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { PluginContainer } from './components/PluginContainer';
@@ -948,37 +949,40 @@ export default function App() {
               aria-labelledby={`tab-${paneId}`}
               aria-hidden={!isActive}
             >
-              <button
-                type="button"
-                className="host-btn plugin-back-btn"
-                onClick={() => setActivePane('workspace')}
-                aria-label="Back to hub"
-                title="Back to hub"
-              >
-                <svg
-                  className="plugin-back-icon"
-                  viewBox="0 0 24 24"
-                  aria-hidden="true"
-                  focusable="false"
+              {createPortal(
+                <button
+                  type="button"
+                  className="host-btn plugin-back-btn"
+                  onClick={() => setActivePane('workspace')}
+                  aria-label="Back to hub"
+                  title="Back to hub"
                 >
-                  <path
-                    d="M3 11.5L12 4l9 7.5"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                  <path
-                    d="M6.5 10.5V20h11V10.5"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-              </button>
+                  <svg
+                    className="plugin-back-icon"
+                    viewBox="0 0 24 24"
+                    aria-hidden="true"
+                    focusable="false"
+                  >
+                    <path
+                      d="M3 11.5L12 4l9 7.5"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                    <path
+                      d="M6.5 10.5V20h11V10.5"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </button>,
+                document.body
+              )}
               <PluginContainer
                 key={`persisted-${plugin.id}-${plugin.url}-${plugin.revision}`}
                 pluginId={plugin.id}
